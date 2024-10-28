@@ -133,10 +133,14 @@ is that the miner chooses, but you can decide which with the following options:
   --block-only       indicates to mine this transaction only in a block
 ";
 
-const GENERATE_USAGE: &str = "blockstack-cli (options) generate-sk
+const GENERATE_USAGE: &str = "blockstack-cli (options) generate-sk [--seed=<seed>]
 
 This method generates a secret key, outputting the hex encoding of the
-secret key, the corresponding public key, and the corresponding P2PKH Stacks address.";
+secret key, the corresponding public key, and the corresponding P2PKH Stacks address.
+
+Options:
+  --seed=<seed>    Optional seed string to generate a deterministic key.
+";
 
 const ADDRESSES_USAGE: &str = "blockstack-cli (options) addresses [secret-key-hex]
 
@@ -574,11 +578,33 @@ fn handle_token_transfer(
 }
 
 fn generate_secret_key(args: &[String], version: TransactionVersion) -> Result<String, CliError> {
+    let mut args = args.to_vec();
+
     if args.len() >= 1 && args[0] == "-h" {
         return Err(CliError::Message(format!("USAGE:\n {}", GENERATE_USAGE)));
     }
 
-    let sk = StacksPrivateKey::new();
+    let mut seed: Option<String> = None;
+
+    if let Some(ix) = args.iter().position(|x| x.starts_with("--seed=")) {
+        let seed_arg = args.remove(ix);
+        seed = Some(seed_arg["--seed=".len()..].to_string());
+    }
+
+    if !args.is_empty() {
+        return Err(CliError::Message(format!(
+            "Unknown or too many arguments provided.\n\nUSAGE:\n {}",
+            GENERATE_USAGE
+        )));
+    }
+
+    let sk = if let Some(seed_str) = seed {
+        let seed_bytes = seed_str.as_bytes();
+        StacksPrivateKey::from_seed(seed_bytes)
+    } else {
+        StacksPrivateKey::new()
+    };
+
     let pk = StacksPublicKey::from_private(&sk);
     let version = match version {
         TransactionVersion::Mainnet => C32_ADDRESS_VERSION_MAINNET_SINGLESIG,
