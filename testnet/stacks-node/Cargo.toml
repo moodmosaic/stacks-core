@@ -52,6 +52,7 @@ http-types = "2.12"
 tempfile = "3.3"
 mockito = "1.5"
 serial_test = "3.2.0"
+proptest = "1.6.0"
 
 [[bin]]
 name = "stacks-node"
