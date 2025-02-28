@@ -16348,108 +16348,149 @@ use proptest::proptest;
 
 type MinerSeed = Vec<u8>;
 
-#[derive(Clone, Debug)]
+// #[derive(Clone, Debug)]
 pub struct TestContext {
     miner_seeds: Vec<MinerSeed>, // Immutable test setup data.
+    signer_test: SignerTest<SpawnedSigner>,
+    nodes_rpc_ports: Vec<u16>,
+    nodes_p2p_ports: Vec<u16>,
 }
 
 #[cfg(test)]
 impl TestContext {
-    fn new(miner_seeds: Vec<MinerSeed>) -> Self {
-        Self { miner_seeds }
+    fn new(
+        miner_seeds: Vec<MinerSeed>,
+        nodes_rpc_ports: Vec<u16>,
+        nodes_p2p_ports: Vec<u16>,
+        num_signers: usize,
+        max_nakamoto_tenures: u32,
+        send_amt: u64,
+        send_fee: u64,
+        num_txs: u64,
+    ) -> Self {
+        let btc_miner_pubkeys: Vec<StacksPublicKey> = miner_seeds
+            .iter()
+            .cloned()
+            .map(|seed| Keychain::default(seed).get_pub_key())
+            .collect();
+
+        let btc_miner_1_seed = miner_seeds[0].clone();
+        let btc_miner_1_pk = btc_miner_pubkeys[0].to_hex();
+
+        let localhost = "127.0.0.1";
+
+        // TODO: Can we have more than 2 nodes? If yes, figure out how to use
+        // all the nodes in the test.
+        let node_1_rpc = nodes_rpc_ports[0];
+        let node_1_rpc_bind = format!("{localhost}:{node_1_rpc}");
+        let node_2_rpc = nodes_rpc_ports[1];
+        let node_2_rpc_bind = format!("{localhost}:{node_2_rpc}");
+
+        let node_1_p2p = nodes_p2p_ports[0];
+
+        let mut node_2_listeners = Vec::new();
+
+        let singer_sk = Secp256k1PrivateKey::random();
+
+        let signer_test = SignerTest::new_with_config_modifications(
+            num_signers,
+            vec![(
+                tests::to_addr(&singer_sk).clone(),
+                (send_amt + send_fee) * num_txs,
+            )],
+            // TODO: Should the signer_config_modifier be parameterized in the
+            // TestContext?
+            |signer_config| {
+                // Lets make sure we never time out since we need to stall some things to force our scenario
+                signer_config.block_proposal_validation_timeout = Duration::from_secs(1800);
+                signer_config.tenure_last_block_proposal_timeout = Duration::from_secs(1800);
+                signer_config.first_proposal_burn_block_timing = Duration::from_secs(1800);
+                let node_host = if signer_config.endpoint.port() % 2 == 0 {
+                    &node_1_rpc_bind
+                } else {
+                    &node_2_rpc_bind
+                };
+                signer_config.node_host = node_host.to_string();
+            },
+            // TODO: Should the node_config_modifier be parameterized in the
+            // TestContext?
+            |config| {
+                config.node.rpc_bind = node_1_rpc_bind.clone();
+                config.node.p2p_bind = format!("{localhost}:{node_1_p2p}");
+                config.node.data_url = format!("http://{node_1_rpc_bind}");
+                config.node.p2p_address = format!("{localhost}:{node_1_p2p}");
+                config.miner.wait_on_interim_blocks = Duration::from_secs(5);
+                config.node.pox_sync_sample_secs = 30;
+                config.burnchain.pox_reward_length = Some(max_nakamoto_tenures);
+
+                config.node.seed = btc_miner_1_seed.clone();
+                config.node.local_peer_seed = btc_miner_1_seed.clone();
+                config.burnchain.local_mining_public_key = Some(btc_miner_1_pk.clone());
+                config.miner.mining_key = Some(Secp256k1PrivateKey::from_seed(&[1]));
+
+                config.events_observers.retain(|listener| {
+                    let Ok(addr) = std::net::SocketAddr::from_str(&listener.endpoint) else {
+                        warn!(
+                        "Cannot parse {} to a socket, assuming it isn't a signer-listener binding",
+                        listener.endpoint
+                    );
+                        return true;
+                    };
+                    if addr.port() % 2 == 0 || addr.port() == test_observer::EVENT_OBSERVER_PORT {
+                        return true;
+                    }
+                    node_2_listeners.push(listener.clone());
+                    false
+                })
+            },
+            Some(btc_miner_pubkeys),
+            None,
+        );
+        Self {
+            miner_seeds,
+            signer_test,
+            nodes_rpc_ports,
+            nodes_p2p_ports,
+        }
     }
+}
+
+struct RunLoopData {
+    rl_thread: thread::JoinHandle<()>,
+    rl_stopper: Arc<std::sync::atomic::AtomicBool>,
+    rl_counters: Counters,
 }
 
 #[derive(Default)]
 pub struct State {
-    running_miners: HashSet<MinerSeed>,
-    last_mined_block: u64,
-    block_commits: HashMap<u64, HashSet<MinerSeed>>,
-    block_leaders: HashMap<u64, MinerSeed>,
+    miner_nakamoto_run_loops: HashMap<MinerSeed, RunLoopData>,
+    miner_commits_skipped: HashMap<MinerSeed, bool>,
 }
 
 impl State {
     pub fn new() -> Self {
         Self {
-            running_miners: HashSet::new(),
-            last_mined_block: 0,
-            block_commits: HashMap::new(),
-            block_leaders: HashMap::new(),
+            miner_nakamoto_run_loops: HashMap::new(),
+            miner_commits_skipped: HashMap::new(),
         }
     }
 
-    pub fn is_miner_running(&self, seed: &MinerSeed) -> bool {
-        self.running_miners.contains(seed)
-    }
-
-    pub fn next_block_height(&self) -> u64 {
-        self.last_mined_block + 1
-    }
-
-    pub fn start_miner(&mut self, miner_seed: &[u8]) {
-        self.running_miners.insert(miner_seed.to_vec());
-        println!("Running miners: {:?}", self.running_miners);
-    }
-
-    pub fn add_block_commit(&mut self, height: u64, miner_seed: &[u8]) {
-        println!(
-            "Block commit at height {} by miner {:?}",
-            height, miner_seed
+    pub fn boot_miner(
+        &mut self,
+        miner_seed: &[u8],
+        rl_thread: thread::JoinHandle<()>,
+        rl_stopper: Arc<std::sync::atomic::AtomicBool>,
+        rl_counters: Counters,
+    ) {
+        let miner_seed = miner_seed.to_vec();
+        self.miner_nakamoto_run_loops.insert(
+            miner_seed,
+            RunLoopData {
+                rl_thread,
+                rl_stopper,
+                rl_counters,
+            },
         );
-        let existing_commits = self.block_commits.entry(height).or_default();
-        existing_commits.insert(miner_seed.to_vec());
-        println!(
-            "Block commiters for height {}: {:?}",
-            height,
-            self.block_commits.get(&height)
-        );
-    }
-
-    pub fn add_sortition_block_leader(&mut self, height: u64, miner_seed: &[u8]) {
-        match self.block_leaders.get(&height) {
-            Some(_) => {
-                panic!(
-                    "FATAL: For height {} the sortition already happened!",
-                    height
-                )
-            }
-            None => {
-                self.block_leaders.insert(height, miner_seed.to_vec());
-                println!(
-                    "Block leader at height {} is miner {:?}",
-                    height, miner_seed
-                );
-            }
-        }
-    }
-}
-
-struct WaitForBlocksCommand {
-    count: u64,
-}
-
-impl WaitForBlocksCommand {
-    pub fn new(count: u64) -> Self {
-        Self { count }
-    }
-}
-
-impl Command for WaitForBlocksCommand {
-    fn check(&self, _state: &State) -> bool {
-        true
-    }
-
-    fn apply(&self, state: &mut State) {
-        println!("{} blocks mined.", self.count);
-        state.last_mined_block += self.count;
-    }
-
-    fn label(&self) -> String {
-        "WAIT_FOR_BLOCKS".to_string()
-    }
-
-    fn build(_ctx: TestContext) -> impl Strategy<Value = CommandWrapper> {
-        (1u64..5).prop_map(|val| CommandWrapper::new(WaitForBlocksCommand::new(val)))
     }
 }
 
@@ -16462,188 +16503,153 @@ pub trait Command {
     where
         Self: Sized;
 }
-
-struct StartMinerCommand {
+struct SkipCommitOpSecondaryMinerCommand {
     miner_seed: MinerSeed,
 }
 
-impl StartMinerCommand {
+impl SkipCommitOpSecondaryMinerCommand {
     pub fn new(miner_seed: &[u8]) -> Self {
-        // Check validity here. Prevent invalid data from being created.
         Self {
             miner_seed: miner_seed.to_vec(),
         }
     }
 }
 
-impl Command for StartMinerCommand {
+impl Command for SkipCommitOpSecondaryMinerCommand {
     fn check(&self, state: &State) -> bool {
-        // Prevents starting the same miner twice.
-        !state.is_miner_running(&self.miner_seed)
-    }
-
-    fn apply(&self, state: &mut State) {
-        // Act
-
-        // This is a dummy action. In a real-world scenario, this could be
-        // replaced with a controller call to start the miner.
-        let actual = std::process::Command::new("date")
-            .arg("+%Y")
-            .output()
-            .expect("Failed to execute process");
-
-        // Assert
-
-        // This is a dummy assertion. In a real-world scenario, this could be
-        // replaced with a more meaningful assertion, like checking a log to
-        // ensure that the miner has started successfully.
-        let actual_str = String::from_utf8_lossy(&actual.stdout)
-            .trim_end()
-            .to_string();
-        let current_year = "2025";
-        assert_eq!(actual_str, current_year, "Year mismatch!");
-
-        // Update the locally tracked state.
-        state.start_miner(&self.miner_seed);
-    }
-
-    fn label(&self) -> String {
-        format!("START_MINER({:?})", self.miner_seed)
-    }
-
-    fn build(ctx: TestContext) -> impl Strategy<Value = CommandWrapper> {
-        proptest::sample::select(ctx.miner_seeds)
-            .prop_map(|seed| CommandWrapper::new(StartMinerCommand::new(&seed)))
-    }
-}
-
-struct SubmitBlockCommitCommand {
-    miner_seed: MinerSeed,
-}
-
-impl SubmitBlockCommitCommand {
-    pub fn new(miner_seed: &[u8]) -> Self {
-        // Check validity here. Prevent invalid data from being created.
-        Self {
-            miner_seed: miner_seed.to_vec(),
-        }
-    }
-}
-
-impl Command for SubmitBlockCommitCommand {
-    fn check(&self, state: &State) -> bool {
-        // A miner can submit a block commit only if:
-        // 1. The miner is running.
-        // 2. The miner has not submitted a block commit at the same height.
-        state.is_miner_running(&self.miner_seed)
-            && !state
-                .block_commits
-                .get(&(state.next_block_height()))
-                .map(|commits| commits.contains(&self.miner_seed))
-                .unwrap_or(false)
-    }
-
-    fn apply(&self, state: &mut State) {
-        println!(
-            "Submitting block commit at height {} by miner {:?}",
-            state.next_block_height(),
-            self.miner_seed
-        );
-
-        let block_commits_count_before = state
-            .block_commits
-            .get(&(state.next_block_height()))
-            .map(|commits| commits.len())
-            .unwrap_or(0);
-
-        state.add_block_commit(state.next_block_height(), &self.miner_seed);
-
-        // This is the place where a general truth about the block commit
-        // should be checked. The following is just an example assertion. This
-        // can also check the state of the `SUT` (System Under Test) after the
-        // command is applied.
-        let block_commits_count_after = state
-            .block_commits
-            .get(&(state.next_block_height()))
-            .map(|commits| commits.len())
-            .unwrap_or(0);
-
-        assert_eq!(block_commits_count_after, block_commits_count_before + 1);
-    }
-
-    fn label(&self) -> String {
-        "SUBMIT_BLOCK_COMMIT".to_string()
-    }
-
-    fn build(ctx: TestContext) -> impl Strategy<Value = CommandWrapper> {
-        proptest::sample::select(ctx.miner_seeds)
-            .prop_map(|seed| CommandWrapper::new(SubmitBlockCommitCommand::new(&seed)))
-    }
-}
-
-struct SortitionCommand;
-
-impl Command for SortitionCommand {
-    fn check(&self, state: &State) -> bool {
-        // The sortition can happen only if:
-        // 1. At least one miner submitted a block commit for the upcoming
-        // block.
-        // 2. The sortition has not happened yet for the upcoming block.
+        // Check if the miner is running and has not already skipped the commit
+        // operations.
         state
-            .block_commits
-            .get(&(state.next_block_height()))
-            .map(|commits| !commits.is_empty())
-            .unwrap_or(false)
+            .miner_nakamoto_run_loops
+            .contains_key(&self.miner_seed)
             && !state
-                .block_leaders
-                .contains_key(&(state.next_block_height()))
+                .miner_commits_skipped
+                .get(&self.miner_seed)
+                .unwrap_or(&false)
     }
 
     fn apply(&self, state: &mut State) {
-        // Simulate a random leader by picking an index from the list of miners
-        // that submitted a block commit. For deterministic leader selection,
-        // we are hashing the height and the set of committers and then picking
-        // the leader based on the hash value.
-        let next_block_height = state.next_block_height();
+        println!("Skipping commit operations for miner {:?}", self.miner_seed);
 
-        let block_commits_next_block = state
-            .block_commits
-            .get(&next_block_height)
-            .expect("No commits found, but check() should have prevented this.")
-            .clone();
-
-        let mut sorted_committers: Vec<MinerSeed> =
-            block_commits_next_block.iter().cloned().collect();
-
-        sorted_committers.sort();
-
-        let mut hasher = DefaultHasher::new();
-        next_block_height.hash(&mut hasher);
-
-        for commit in &sorted_committers {
-            commit.hash(&mut hasher);
+        if let Some(run_loop) = state.miner_nakamoto_run_loops.get_mut(&self.miner_seed) {
+            run_loop.rl_counters.naka_skip_commit_op.set(true);
+        } else {
+            panic!("Miner {:?} run loop not found in state", self.miner_seed);
         }
 
-        let hash_value = hasher.finish();
-
-        // Pick the leader deterministically.
-        let leader_index = (hash_value as usize) % sorted_committers.len();
-        let leader = sorted_committers.get(leader_index).unwrap();
-
-        println!(
-            "Sortition leader at height {} is miner {:?}",
-            next_block_height, leader
-        );
-
-        state.add_sortition_block_leader(next_block_height, leader);
+        state
+            .miner_commits_skipped
+            .insert(self.miner_seed.clone(), true);
     }
 
     fn label(&self) -> String {
-        "SORTITION".to_string()
+        format!("SKIP_COMMIT_OP({:?})", self.miner_seed)
     }
 
-    fn build(_ctx: TestContext) -> impl Strategy<Value = CommandWrapper> {
-        Just(CommandWrapper::new(SortitionCommand))
+    fn build(ctx: TestContext) -> impl Strategy<Value = CommandWrapper> {
+        // Secondary miner -> Everything except the first one. Slice from 1 to
+        // the end.
+        proptest::sample::select(ctx.miner_seeds[1..].to_vec())
+            .prop_map(|seed| CommandWrapper::new(SkipCommitOpSecondaryMinerCommand::new(&seed)))
+    }
+}
+
+struct BootToNakamotoCommand {
+    miner_seed: MinerSeed,
+    rpc_port: u16,
+    p2p_port: u16,
+    conf: Config,
+}
+
+impl BootToNakamotoCommand {
+    pub fn new(miner_seed: &[u8], rpc_port: u16, p2p_port: u16, conf: Config) -> Self {
+        Self {
+            miner_seed: miner_seed.to_vec(),
+            rpc_port,
+            p2p_port,
+            conf,
+        }
+    }
+}
+
+impl Command for BootToNakamotoCommand {
+    fn check(&self, state: &State) -> bool {
+        // TODO: Implement check. Check at least that:
+        // - rpc and p2p ports are not in use.
+        // - the miner is not already booted to Nakamoto.
+        // - the miner seed is registered in the signer test.
+        state
+            .miner_nakamoto_run_loops
+            .get(&self.miner_seed)
+            .is_none()
+    }
+
+    fn apply(&self, state: &mut State) {
+        println!("Miner {:?} booting to Nakamoto", self.miner_seed);
+
+        let btc_miner_pk = Keychain::default(self.miner_seed.clone()).get_pub_key();
+        let mut new_conf = self.conf.clone();
+        new_conf.node.rpc_bind = format!("127.0.0.1:{:?}", self.rpc_port);
+        new_conf.node.p2p_bind = format!("127.0.0.1:{:?}", self.p2p_port);
+        new_conf.node.data_url = format!("http://127.0.0.1:{:?}", self.rpc_port);
+        new_conf.node.p2p_address = format!("127.0.0.1:{:?}", self.p2p_port);
+        new_conf.node.seed = self.miner_seed.clone();
+        new_conf.burnchain.local_mining_public_key = Some(btc_miner_pk.to_hex());
+        new_conf.node.local_peer_seed = self.miner_seed.clone();
+        new_conf.miner.mining_key = Some(Secp256k1PrivateKey::from_seed(&[2]));
+        new_conf.node.miner = true;
+        new_conf.events_observers.clear();
+        // new_conf.events_observers.extend(node_2_listeners);
+        // assert!(!new_conf.events_observers.is_empty());
+
+        let node_1_sk = Secp256k1PrivateKey::from_seed(&self.conf.node.local_peer_seed);
+        let node_1_pk = StacksPublicKey::from_private(&node_1_sk);
+
+        new_conf.node.working_dir = format!("{}-1", new_conf.node.working_dir);
+
+        new_conf.node.set_bootstrap_nodes(
+            format!("{}@{}", &node_1_pk.to_hex(), self.conf.node.p2p_bind),
+            self.conf.burnchain.chain_id,
+            self.conf.burnchain.peer_version,
+        );
+        // let http_origin = format!("http://{}", &self.conf.node.rpc_bind);
+
+        let mut nakamoto_run_loop = boot_nakamoto::BootRunLoop::new(new_conf.clone()).unwrap();
+        let rl_stopper = nakamoto_run_loop.get_termination_switch();
+        // let rl_coord_channels = nakamoto_run_loop.coordinator_channels();
+        // let Counters {
+        //     naka_submitted_commits: rl2_commits,
+        //     naka_skip_commit_op: rl2_skip_commit_op,
+        //     naka_mined_blocks: blocks_mined2,
+        //     ..
+        // } = nakamoto_run_loop.counters();
+        let rl_counters = nakamoto_run_loop.counters();
+
+        let rl_thread = thread::Builder::new()
+            .name("run_loop_2".into())
+            .spawn(move || nakamoto_run_loop.start(None, 0))
+            .unwrap();
+
+        // TODO: Figure out assertion here.
+
+        // TODO: Store the run loop and the run loop stopper in the state.
+        state.boot_miner(&self.miner_seed, rl_thread, rl_stopper, rl_counters);
+    }
+
+    fn label(&self) -> String {
+        format!("BOOT_TO_NAKAMOTO({:?})", self.miner_seed)
+    }
+
+    fn build(ctx: TestContext) -> impl Strategy<Value = CommandWrapper> {
+        (
+            proptest::sample::select(ctx.miner_seeds),
+            (1u16..65535),
+            (1u16..65535),
+            Just(ctx.signer_test.running_nodes.conf.clone()),
+        )
+            .prop_map(|(seed, rpc_port, p2p_port, conf)| {
+                CommandWrapper::new(BootToNakamotoCommand::new(&seed, rpc_port, p2p_port, conf))
+            })
     }
 }
 
@@ -16668,82 +16674,53 @@ impl Debug for CommandWrapper {
     }
 }
 
-proptest! {
-    #[test]
-    fn stateful_test(
-        commands in Just(TestContext::new(vec![vec![1, 1, 1, 1], vec![2, 2, 2, 2]]))
-            .prop_flat_map(|ctx| vec(
-                prop_oneof![
-                    SortitionCommand::build(ctx.clone()),
-                    StartMinerCommand::build(ctx.clone()),
-                    SubmitBlockCommitCommand::build(ctx.clone()),
-                    WaitForBlocksCommand::build(ctx.clone()),
-            ],
-            1..16, // Change to something higher like 70.
-        ))
-    ) {
-      println!("\n=== New Test Run ===\n");
-
-      let mut state = State::new();
-      let mut executed_commands = Vec::with_capacity(commands.len());
-
-      for cmd in &commands {
-          if cmd.command.check(&state) {
-              cmd.command.apply(&mut state);
-              executed_commands.push(cmd);
-          }
-      }
-
-      println!("\nSelected commands:\n");
-      for command in &commands {
-        println!("{:?}", command);
-      }
-
-      println!("\nExecuted commands:\n");
-      for command in &executed_commands {
-          println!("{:?}", command);
-      }
-  }
-}
-
 #[test]
-fn hardcoded_sequence_test() {
-    let test_ctx = TestContext::new(vec![vec![1, 1, 1, 1], vec![2, 2, 2, 2]]);
-    let seed_1 = &test_ctx.miner_seeds[0];
-    let seed_2 = &test_ctx.miner_seeds[1];
-
+fn hardcoded_integration_test_using_commands() {
     let mut state = State::new();
 
-    // Start 2 miners.
-    let start_miner_1 = StartMinerCommand::new(seed_1);
-    assert!(start_miner_1.check(&state));
-    start_miner_1.apply(&mut state);
+    let test_context = TestContext::new(
+        vec![vec![1, 1, 1, 1], vec![2, 2, 2, 2]],
+        vec![gen_random_port(), gen_random_port()],
+        vec![gen_random_port(), gen_random_port()],
+        2,
+        30,
+        100,
+        180,
+        3,
+    );
 
-    let start_miner_2 = StartMinerCommand::new(seed_2);
-    assert!(start_miner_2.check(&state));
-    start_miner_2.apply(&mut state);
+    // **Step 1: Boot secondary miner to Nakamoto**
+    let miner_2_boot_nakamoto = BootToNakamotoCommand::new(
+        &test_context.miner_seeds[1],
+        test_context.nodes_rpc_ports[1],
+        test_context.nodes_p2p_ports[1],
+        test_context.signer_test.running_nodes.conf.clone(),
+    );
 
-    // Submit block commit by miner 1.
-    let submit_block_commit_1 = SubmitBlockCommitCommand::new(seed_1);
-    assert!(submit_block_commit_1.check(&state));
-    submit_block_commit_1.apply(&mut state);
+    assert!(miner_2_boot_nakamoto.check(&state));
 
-    // Submit block commit by miner 2.
-    let submit_block_commit_2 = SubmitBlockCommitCommand::new(seed_2);
-    assert!(submit_block_commit_2.check(&state));
-    submit_block_commit_2.apply(&mut state);
+    miner_2_boot_nakamoto.apply(&mut state);
 
-    // Sortition.
-    let sortition = SortitionCommand;
-    assert!(sortition.check(&state));
-    sortition.apply(&mut state);
-    assert!(state.block_leaders.contains_key(&1));
-    let leader = state.block_leaders.get(&1).unwrap();
-    assert!(leader == seed_1 || leader == seed_2);
+    // **Step 2: Skip commit operation for secondary miner**
+    let skip_commit_op = SkipCommitOpSecondaryMinerCommand::new(&test_context.miner_seeds[1]);
 
-    // Wait for 2 blocks.
-    let wait_for_blocks = WaitForBlocksCommand::new(2);
-    assert!(wait_for_blocks.check(&state));
-    wait_for_blocks.apply(&mut state);
-    assert_eq!(state.last_mined_block, 2);
+    assert!(skip_commit_op.check(&state)); // Ensure skip operation is valid
+    skip_commit_op.apply(&mut state); // Apply the skip commit operation
+
+    // **Step 3: Verify state updates**
+    assert!(state
+        .miner_commits_skipped
+        .get(&test_context.miner_seeds[1])
+        .unwrap_or(&false));
+
+    if let Some(run_loop) = state
+        .miner_nakamoto_run_loops
+        .get(&test_context.miner_seeds[1])
+    {
+        assert_eq!(run_loop.rl_counters.naka_skip_commit_op.get(), true);
+    } else {
+        panic!("Miner 2 run loop should be present in state!");
+    }
+
+    println!("Test passed: Booted miner and skipped commit operation.");
 }
