@@ -16674,6 +16674,52 @@ impl Debug for CommandWrapper {
     }
 }
 
+// proptest! {
+//     #[test]
+//     fn stateful_test(
+//         commands in Just(
+//             TestContext::new(
+//                 vec![vec![1, 1, 1, 1], vec![2, 2, 2, 2]], vec![gen_random_port(), gen_random_port()],
+//                 vec![gen_random_port(), gen_random_port()],
+//                 2,
+//                 30,
+//                 100,
+//                 180,
+//                 3
+//             )
+//         )
+//         .prop_flat_map(|ctx| vec(
+//             prop_oneof![
+//                 BootToNakamotoCommand::build(ctx.clone()),
+//                 SkipCommitOpSecondaryMinerCommand::build(ctx.clone()),
+//         ],
+//         1..16, // Change to something higher like 70.
+//         ))
+//     ) {
+//       println!("\n=== New Test Run ===\n");
+
+//       let mut state = State::new();
+//       let mut executed_commands = Vec::with_capacity(commands.len());
+
+//       for cmd in &commands {
+//           if cmd.command.check(&state) {
+//               cmd.command.apply(&mut state);
+//               executed_commands.push(cmd);
+//           }
+//       }
+
+//       println!("\nSelected commands:\n");
+//       for command in &commands {
+//         println!("{:?}", command);
+//       }
+
+//       println!("\nExecuted commands:\n");
+//       for command in &executed_commands {
+//           println!("{:?}", command);
+//       }
+//   }
+// }
+
 #[test]
 fn hardcoded_integration_test_using_commands() {
     let mut state = State::new();
