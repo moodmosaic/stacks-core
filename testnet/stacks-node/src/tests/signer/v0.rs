@@ -12087,7 +12087,6 @@ fn mark_miner_as_invalid_if_reorg_is_rejected() {
 }
 
 use std::fmt::{Debug, Formatter, Result as FmtResult};
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -12099,9 +12098,8 @@ use proptest::proptest;
 
 type MinerSeed = Vec<u8>;
 
-// #[derive(Clone, Debug)]
 pub struct TestContext {
-    miner_seeds: Vec<MinerSeed>, // Immutable test setup data.
+    miner_seeds: Vec<MinerSeed>,
     signer_test: SignerTest<SpawnedSigner>,
     nodes_rpc_ports: Vec<u16>,
     nodes_p2p_ports: Vec<u16>,
@@ -12250,10 +12248,11 @@ pub trait Command {
     fn check(&self, state: &State) -> bool;
     fn apply(&self, state: &mut State);
     fn label(&self) -> String;
-    fn build(ctx: TestContext) -> impl Strategy<Value = CommandWrapper>
+    fn build(ctx: &TestContext) -> impl Strategy<Value = CommandWrapper>
     where
         Self: Sized;
 }
+
 struct SkipCommitOpSecondaryMinerCommand {
     miner_seed: MinerSeed,
 }
@@ -12297,7 +12296,7 @@ impl Command for SkipCommitOpSecondaryMinerCommand {
         format!("SKIP_COMMIT_OP({:?})", self.miner_seed)
     }
 
-    fn build(ctx: TestContext) -> impl Strategy<Value = CommandWrapper> {
+    fn build(ctx: &TestContext) -> impl Strategy<Value = CommandWrapper> {
         // Secondary miner -> Everything except the first one. Slice from 1 to
         // the end.
         proptest::sample::select(ctx.miner_seeds[1..].to_vec())
@@ -12391,9 +12390,9 @@ impl Command for BootToNakamotoCommand {
         format!("BOOT_TO_NAKAMOTO({:?})", self.miner_seed)
     }
 
-    fn build(ctx: TestContext) -> impl Strategy<Value = CommandWrapper> {
+    fn build(ctx: &TestContext) -> impl Strategy<Value = CommandWrapper> {
         (
-            proptest::sample::select(ctx.miner_seeds),
+            proptest::sample::select(ctx.miner_seeds.clone()),
             (1u16..65535),
             (1u16..65535),
             Just(ctx.signer_test.running_nodes.conf.clone()),
@@ -12425,51 +12424,49 @@ impl Debug for CommandWrapper {
     }
 }
 
-// proptest! {
-//     #[test]
-//     fn stateful_test(
-//         commands in Just(
-//             TestContext::new(
-//                 vec![vec![1, 1, 1, 1], vec![2, 2, 2, 2]], vec![gen_random_port(), gen_random_port()],
-//                 vec![gen_random_port(), gen_random_port()],
-//                 2,
-//                 30,
-//                 100,
-//                 180,
-//                 3
-//             )
-//         )
-//         .prop_flat_map(|ctx| vec(
-//             prop_oneof![
-//                 BootToNakamotoCommand::build(ctx.clone()),
-//                 SkipCommitOpSecondaryMinerCommand::build(ctx.clone()),
-//         ],
-//         1..16, // Change to something higher like 70.
-//         ))
-//     ) {
-//       println!("\n=== New Test Run ===\n");
+#[test]
+fn stateful_test() {
+    let test_context = TestContext::new(
+        vec![vec![1, 1, 1, 1], vec![2, 2, 2, 2]],
+        vec![gen_random_port(), gen_random_port()],
+        vec![gen_random_port(), gen_random_port()],
+        2,
+        30,
+        100,
+        180,
+        3
+    );
 
-//       let mut state = State::new();
-//       let mut executed_commands = Vec::with_capacity(commands.len());
+    proptest!(|(commands in vec(
+        prop_oneof![
+            BootToNakamotoCommand::build(&test_context),
+            SkipCommitOpSecondaryMinerCommand::build(&test_context),
+        ],
+        1..16,
+    ))| {
+        println!("\n=== New Test Run ===\n");
 
-//       for cmd in &commands {
-//           if cmd.command.check(&state) {
-//               cmd.command.apply(&mut state);
-//               executed_commands.push(cmd);
-//           }
-//       }
+        let mut state = State::new();
+        let mut executed_commands = Vec::with_capacity(commands.len());
 
-//       println!("\nSelected commands:\n");
-//       for command in &commands {
-//         println!("{:?}", command);
-//       }
+        for cmd in &commands {
+            if cmd.command.check(&state) {
+                cmd.command.apply(&mut state);
+                executed_commands.push(cmd);
+            }
+        }
 
-//       println!("\nExecuted commands:\n");
-//       for command in &executed_commands {
-//           println!("{:?}", command);
-//       }
-//   }
-// }
+        println!("\nSelected commands:\n");
+        for command in &commands {
+            println!("{:?}", command);
+        }
+
+        println!("\nExecuted commands:\n");
+        for command in &executed_commands {
+            println!("{:?}", command);
+        }
+    });
+}
 
 #[test]
 fn hardcoded_integration_test_using_commands() {
