@@ -12304,14 +12304,14 @@ impl Command for SkipCommitOpSecondaryMinerCommand {
     }
 }
 
-struct BootToNakamotoCommand {
+struct BootSecondaryMinerToNakamotoCommand {
     miner_seed: MinerSeed,
     rpc_port: u16,
     p2p_port: u16,
     conf: Config,
 }
 
-impl BootToNakamotoCommand {
+impl BootSecondaryMinerToNakamotoCommand {
     pub fn new(miner_seed: &[u8], rpc_port: u16, p2p_port: u16, conf: Config) -> Self {
         Self {
             miner_seed: miner_seed.to_vec(),
@@ -12322,7 +12322,7 @@ impl BootToNakamotoCommand {
     }
 }
 
-impl Command for BootToNakamotoCommand {
+impl Command for BootSecondaryMinerToNakamotoCommand {
     fn check(&self, state: &State) -> bool {
         // TODO: Implement check. Check at least that:
         // - rpc and p2p ports are not in use.
@@ -12391,13 +12391,13 @@ impl Command for BootToNakamotoCommand {
 
     fn build(ctx: &TestContext) -> impl Strategy<Value = CommandWrapper> {
         (
-            proptest::sample::select(ctx.miner_seeds.clone()),
+            proptest::sample::select(ctx.miner_seeds[1..].to_vec()),
             (1u16..65535),
             (1u16..65535),
             Just(ctx.signer_test.running_nodes.conf.clone()),
         )
             .prop_map(|(miner_seed, rpc_port, p2p_port, conf)| {
-                CommandWrapper::new(BootToNakamotoCommand::new(
+                CommandWrapper::new(BootSecondaryMinerToNakamotoCommand::new(
                     &miner_seed,
                     rpc_port,
                     p2p_port,
@@ -12443,7 +12443,7 @@ fn stateful_test() {
 
     proptest!(|(commands in vec(
         prop_oneof![
-            BootToNakamotoCommand::build(&test_context),
+            BootSecondaryMinerToNakamotoCommand::build(&test_context),
             SkipCommitOpSecondaryMinerCommand::build(&test_context),
         ],
         1..16,
@@ -12488,7 +12488,7 @@ fn hardcoded_integration_test_using_commands() {
     );
 
     // **Step 1: Boot secondary miner to Nakamoto**
-    let miner_2_boot_nakamoto = BootToNakamotoCommand::new(
+    let miner_2_boot_nakamoto = BootSecondaryMinerToNakamotoCommand::new(
         &test_context.miner_seeds[1],
         test_context.nodes_rpc_ports[1],
         test_context.nodes_p2p_ports[1],
