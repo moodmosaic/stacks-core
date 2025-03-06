@@ -12382,7 +12382,6 @@ impl Command for BootToNakamotoCommand {
 
         // TODO: Figure out assertion here.
 
-        // TODO: Store the run loop and the run loop stopper in the state.
         state.boot_miner(&self.miner_seed, rl_thread, rl_stopper, rl_counters);
     }
 
@@ -12397,8 +12396,13 @@ impl Command for BootToNakamotoCommand {
             (1u16..65535),
             Just(ctx.signer_test.running_nodes.conf.clone()),
         )
-            .prop_map(|(seed, rpc_port, p2p_port, conf)| {
-                CommandWrapper::new(BootToNakamotoCommand::new(&seed, rpc_port, p2p_port, conf))
+            .prop_map(|(miner_seed, rpc_port, p2p_port, conf)| {
+                CommandWrapper::new(BootToNakamotoCommand::new(
+                    &miner_seed,
+                    rpc_port,
+                    p2p_port,
+                    conf,
+                ))
             })
     }
 }
@@ -12434,7 +12438,7 @@ fn stateful_test() {
         30,
         100,
         180,
-        3
+        3,
     );
 
     proptest!(|(commands in vec(
