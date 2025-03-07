@@ -12545,15 +12545,24 @@ impl Debug for CommandWrapper {
 
 #[test]
 fn stateful_test() {
+    let miner_seeds = vec![vec![1, 1, 1, 1], vec![2, 2, 2, 2]];
+    let nodes_rpc_ports = vec![gen_random_port(), gen_random_port()];
+    let nodes_p2p_ports = vec![gen_random_port(), gen_random_port()];
+    let num_signers = 2;
+    let max_nakamoto_tenures = 30;
+    let send_amt = 100;
+    let send_fee = 180;
+    let num_txs = 3;
+
     let test_context = TestContext::new(
-        vec![vec![1, 1, 1, 1], vec![2, 2, 2, 2]],
-        vec![gen_random_port(), gen_random_port()],
-        vec![gen_random_port(), gen_random_port()],
-        2,
-        30,
-        100,
-        180,
-        3,
+        miner_seeds,
+        nodes_rpc_ports,
+        nodes_p2p_ports,
+        num_signers,
+        max_nakamoto_tenures,
+        send_amt,
+        send_fee,
+        num_txs,
     );
 
     proptest!(|(commands in vec(
@@ -12591,16 +12600,24 @@ fn stateful_test() {
 
 #[test]
 fn hardcoded_integration_test_using_commands() {
+    let miner_seeds = vec![vec![1, 1, 1, 1], vec![2, 2, 2, 2]];
+    let nodes_rpc_ports = vec![gen_random_port(), gen_random_port()];
+    let nodes_p2p_ports = vec![gen_random_port(), gen_random_port()];
+    let num_signers = 2;
+    let max_nakamoto_tenures = 30;
+    let send_amt = 100;
+    let send_fee = 180;
+    let num_txs = 3;
 
     let test_context = TestContext::new(
-        vec![vec![1, 1, 1, 1], vec![2, 2, 2, 2]],
-        vec![gen_random_port(), gen_random_port()],
-        vec![gen_random_port(), gen_random_port()],
-        2,
-        30,
-        100,
-        180,
-        3,
+        miner_seeds,
+        nodes_rpc_ports,
+        nodes_p2p_ports,
+        num_signers,
+        max_nakamoto_tenures,
+        send_amt,
+        send_fee,
+        num_txs,
     );
 
     let mut state = State::new();
