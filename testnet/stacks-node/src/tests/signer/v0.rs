@@ -12543,6 +12543,39 @@ impl Debug for CommandWrapper {
     }
 }
 
+macro_rules! madhouse {
+    ($test_context:expr, [ $( $command:ident ),* ], $min:expr, $max:expr) => {
+        proptest!(|(commands in vec(
+            prop_oneof![
+                $( $command::build(&$test_context), )*
+            ],
+            $min..$max,
+        ))| {
+            println!("\n=== New Test Run ===\n");
+
+            let mut state = State::new();
+            let mut executed_commands = Vec::with_capacity(commands.len());
+
+            for cmd in &commands {
+                if cmd.command.check(&state) {
+                    cmd.command.apply(&mut state);
+                    executed_commands.push(cmd);
+                }
+            }
+
+            println!("\nSelected commands:\n");
+            for command in &commands {
+                println!("{:?}", command);
+            }
+
+            println!("\nExecuted commands:\n");
+            for command in &executed_commands {
+                println!("{:?}", command);
+            }
+        });
+    };
+}
+
 #[test]
 fn stateful_test() {
     let miner_seeds = vec![vec![1, 1, 1, 1], vec![2, 2, 2, 2]];
@@ -12565,37 +12598,17 @@ fn stateful_test() {
         num_txs,
     );
 
-    proptest!(|(commands in vec(
-        prop_oneof![
-            BootPrimaryMinerToNakamotoCommand::build(&test_context),
-            BootSecondaryMinerToNakamotoCommand::build(&test_context),
-            SkipCommitOpSecondaryMinerCommand::build(&test_context),
-            SkipCommitOpPrimaryMinerCommand::build(&test_context),
+    madhouse!(
+        test_context,
+        [
+            BootPrimaryMinerToNakamotoCommand,
+            BootSecondaryMinerToNakamotoCommand,
+            SkipCommitOpSecondaryMinerCommand,
+            SkipCommitOpPrimaryMinerCommand
         ],
-        1..16,
-    ))| {
-        println!("\n=== New Test Run ===\n");
-
-        let mut state = State::new();
-        let mut executed_commands = Vec::with_capacity(commands.len());
-
-        for cmd in &commands {
-            if cmd.command.check(&state) {
-                cmd.command.apply(&mut state);
-                executed_commands.push(cmd);
-            }
-        }
-
-        println!("\nSelected commands:\n");
-        for command in &commands {
-            println!("{:?}", command);
-        }
-
-        println!("\nExecuted commands:\n");
-        for command in &executed_commands {
-            println!("{:?}", command);
-        }
-    });
+        1, // Min
+        16 // Max
+    );
 }
 
 #[test]
