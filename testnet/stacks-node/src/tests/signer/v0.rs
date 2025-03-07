@@ -12260,6 +12260,61 @@ pub trait Command {
         Self: Sized;
 }
 
+struct SkipCommitOpPrimaryMinerCommand {
+    miner_seed: MinerSeed,
+    signer_test: Arc<std::sync::Mutex<SignerTest<SpawnedSigner>>>,
+}
+
+impl SkipCommitOpPrimaryMinerCommand {
+    pub fn new(
+        miner_seed: &[u8],
+        signer_test: Arc<std::sync::Mutex<SignerTest<SpawnedSigner>>>,
+    ) -> Self {
+        Self {
+            miner_seed: miner_seed.to_vec(),
+            signer_test,
+        }
+    }
+}
+
+impl Command for SkipCommitOpPrimaryMinerCommand {
+    fn check(&self, state: &State) -> bool {
+        // Check if the miner is running and has not already skipped the commit
+        // operations.
+        !state
+            .miner_commits_skipped
+            .get(&self.miner_seed)
+            .unwrap_or(&false)
+    }
+
+    fn apply(&self, state: &mut State) {
+        println!("Skipping commit operations for miner {:?}", self.miner_seed);
+
+        self.signer_test
+            .lock()
+            .unwrap()
+            .running_nodes
+            .nakamoto_test_skip_commit_op
+            .set(true);
+
+        state
+            .miner_commits_skipped
+            .insert(self.miner_seed.clone(), true);
+    }
+
+    fn label(&self) -> String {
+        format!("SKIP_COMMIT_OP({:?})", self.miner_seed)
+    }
+
+    fn build(ctx: &TestContext) -> impl Strategy<Value = CommandWrapper> {
+        // Primary miner -> The first one.
+        Just(CommandWrapper::new(SkipCommitOpPrimaryMinerCommand::new(
+            &ctx.miner_seeds[0],
+            ctx.signer_test.clone(),
+        )))
+    }
+}
+
 struct SkipCommitOpSecondaryMinerCommand {
     miner_seed: MinerSeed,
 }
@@ -12506,6 +12561,7 @@ fn stateful_test() {
             BootPrimaryMinerToNakamotoCommand::build(&test_context),
             BootSecondaryMinerToNakamotoCommand::build(&test_context),
             SkipCommitOpSecondaryMinerCommand::build(&test_context),
+            SkipCommitOpPrimaryMinerCommand::build(&test_context),
         ],
         1..16,
     ))| {
