@@ -12591,7 +12591,6 @@ fn stateful_test() {
 
 #[test]
 fn hardcoded_integration_test_using_commands() {
-    let mut state = State::new();
 
     let test_context = TestContext::new(
         vec![vec![1, 1, 1, 1], vec![2, 2, 2, 2]],
@@ -12603,6 +12602,8 @@ fn hardcoded_integration_test_using_commands() {
         180,
         3,
     );
+
+    let mut state = State::new();
 
     // **Step 1: Boot secondary miner to Nakamoto**
     let miner_2_boot_nakamoto = BootSecondaryMinerToNakamotoCommand::new(
