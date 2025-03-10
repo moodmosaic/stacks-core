@@ -12137,8 +12137,6 @@ impl TestContext {
 
         let node_1_p2p = nodes_p2p_ports[0];
 
-        let mut node_2_listeners = Vec::new();
-
         let singer_sk = Secp256k1PrivateKey::random();
 
         let signer_test = SignerTest::new_with_config_modifications(
@@ -12176,21 +12174,6 @@ impl TestContext {
                 config.node.local_peer_seed = btc_miner_1_seed.clone();
                 config.burnchain.local_mining_public_key = Some(btc_miner_1_pk.clone());
                 config.miner.mining_key = Some(Secp256k1PrivateKey::from_seed(&[1]));
-
-                config.events_observers.retain(|listener| {
-                    let Ok(addr) = std::net::SocketAddr::from_str(&listener.endpoint) else {
-                        warn!(
-                        "Cannot parse {} to a socket, assuming it isn't a signer-listener binding",
-                        listener.endpoint
-                    );
-                        return true;
-                    };
-                    if addr.port() % 2 == 0 || addr.port() == test_observer::EVENT_OBSERVER_PORT {
-                        return true;
-                    }
-                    node_2_listeners.push(listener.clone());
-                    false
-                })
             },
             Some(btc_miner_pubkeys),
             None,
@@ -12213,16 +12196,21 @@ struct RunLoopData {
 #[derive(Default)]
 pub struct State {
     miner_nakamoto_run_loops: HashMap<MinerSeed, RunLoopData>,
+    unstarted_run_loops: HashMap<MinerSeed, (boot_nakamoto::BootRunLoop, Counters)>,
     miner_commits_skipped: HashMap<MinerSeed, bool>,
     miners_booted_to_nakamoto: HashSet<MinerSeed>,
+    // Track secondary node ports (RPC, P2P)
+    secondary_node_ports: HashMap<MinerSeed, (u16, u16)>,
 }
 
 impl State {
     pub fn new() -> Self {
         Self {
             miner_nakamoto_run_loops: HashMap::new(),
+            unstarted_run_loops: HashMap::new(),
             miner_commits_skipped: HashMap::new(),
             miners_booted_to_nakamoto: HashSet::new(),
+            secondary_node_ports: HashMap::new(),
         }
     }
 
@@ -12247,6 +12235,20 @@ impl State {
 
     pub fn boot_primary_miner_to_nakamoto(&mut self, miner_seed: &[u8]) {
         self.miners_booted_to_nakamoto.insert(miner_seed.to_vec());
+    }
+
+    pub fn create_secondary_miner_run_loop(
+        &mut self,
+        miner_seed: &[u8],
+        run_loop: boot_nakamoto::BootRunLoop,
+        counters: Counters,
+        rpc_port: u16,
+        p2p_port: u16,
+    ) {
+        self.unstarted_run_loops
+            .insert(miner_seed.to_vec(), (run_loop, counters));
+        self.secondary_node_ports
+            .insert(miner_seed.to_vec(), (rpc_port, p2p_port));
     }
 }
 
@@ -12279,8 +12281,7 @@ impl SkipCommitOpPrimaryMinerCommand {
 
 impl Command for SkipCommitOpPrimaryMinerCommand {
     fn check(&self, state: &State) -> bool {
-        // Check if the miner is running and has not already skipped the commit
-        // operations.
+        // Check if the miner has not already skipped the commit operations.
         !state
             .miner_commits_skipped
             .get(&self.miner_seed)
@@ -12329,11 +12330,12 @@ impl SkipCommitOpSecondaryMinerCommand {
 
 impl Command for SkipCommitOpSecondaryMinerCommand {
     fn check(&self, state: &State) -> bool {
-        // Check if the miner is running and has not already skipped the commit
-        // operations.
-        state
+        // Check if the miner has a run loop (whether started or not) and has
+        // not already skipped the commit operations.
+        (state
             .miner_nakamoto_run_loops
             .contains_key(&self.miner_seed)
+            || state.unstarted_run_loops.contains_key(&self.miner_seed))
             && !state
                 .miner_commits_skipped
                 .get(&self.miner_seed)
@@ -12345,6 +12347,8 @@ impl Command for SkipCommitOpSecondaryMinerCommand {
 
         if let Some(run_loop) = state.miner_nakamoto_run_loops.get_mut(&self.miner_seed) {
             run_loop.rl_counters.naka_skip_commit_op.set(true);
+        } else if let Some((_, counters)) = state.unstarted_run_loops.get_mut(&self.miner_seed) {
+            counters.naka_skip_commit_op.set(true);
         } else {
             panic!("Miner {:?} run loop not found in state", self.miner_seed);
         }
@@ -12359,8 +12363,7 @@ impl Command for SkipCommitOpSecondaryMinerCommand {
     }
 
     fn build(ctx: &TestContext) -> impl Strategy<Value = CommandWrapper> {
-        // Secondary miner -> Everything except the first one. Slice from 1 to
-        // the end.
+        // Secondary miners -> Everything except the first one.
         proptest::sample::select(ctx.miner_seeds[1..].to_vec())
             .prop_map(|seed| CommandWrapper::new(SkipCommitOpSecondaryMinerCommand::new(&seed)))
     }
@@ -12414,14 +12417,14 @@ impl Command for BootPrimaryMinerToNakamotoCommand {
     }
 }
 
-struct BootSecondaryMinerToNakamotoCommand {
+struct CreateSecondaryMinerRunLoopCommand {
     miner_seed: MinerSeed,
     rpc_port: u16,
     p2p_port: u16,
     conf: Config,
 }
 
-impl BootSecondaryMinerToNakamotoCommand {
+impl CreateSecondaryMinerRunLoopCommand {
     pub fn new(miner_seed: &[u8], rpc_port: u16, p2p_port: u16, conf: Config) -> Self {
         Self {
             miner_seed: miner_seed.to_vec(),
@@ -12432,20 +12435,18 @@ impl BootSecondaryMinerToNakamotoCommand {
     }
 }
 
-impl Command for BootSecondaryMinerToNakamotoCommand {
+impl Command for CreateSecondaryMinerRunLoopCommand {
     fn check(&self, state: &State) -> bool {
-        // TODO: Implement check. Check at least that:
-        // - rpc and p2p ports are not in use.
-        // - the miner is not already booted to Nakamoto.
-        // - the miner seed is registered in the signer test.
-        state
-            .miner_nakamoto_run_loops
-            .get(&self.miner_seed)
-            .is_none()
+        // Check if run loop doesn't already exist for this miner and the miner
+        // is not already booted to Nakamoto.
+        !state.unstarted_run_loops.contains_key(&self.miner_seed)
+            && !state
+                .miner_nakamoto_run_loops
+                .contains_key(&self.miner_seed)
     }
 
     fn apply(&self, state: &mut State) {
-        println!("Miner {:?} booting to Nakamoto", self.miner_seed);
+        println!("Creating run loop for miner {:?}", self.miner_seed);
 
         let btc_miner_pk = Keychain::default(self.miner_seed.clone()).get_pub_key();
         let mut new_conf = self.conf.clone();
@@ -12458,9 +12459,31 @@ impl Command for BootSecondaryMinerToNakamotoCommand {
         new_conf.node.local_peer_seed = self.miner_seed.clone();
         new_conf.miner.mining_key = Some(Secp256k1PrivateKey::from_seed(&[2]));
         new_conf.node.miner = true;
+
+        let mut primary_conf = self.conf.clone();
+        let mut node_2_listeners = Vec::new();
+
+        primary_conf.events_observers.retain(|listener| {
+            let Ok(addr) = std::net::SocketAddr::from_str(&listener.endpoint) else {
+                println!(
+                    "Cannot parse {} to a socket, assuming it isn't a signer-listener binding",
+                    listener.endpoint
+                );
+                return true;
+            };
+
+            if addr.port() % 2 == 0 || addr.port() == test_observer::EVENT_OBSERVER_PORT {
+                return true;
+            }
+
+            println!("Adding listener with port {}", addr.port());
+            node_2_listeners.push(listener.clone());
+            false
+        });
+
         new_conf.events_observers.clear();
-        // new_conf.events_observers.extend(node_2_listeners);
-        // assert!(!new_conf.events_observers.is_empty());
+        new_conf.events_observers.extend(node_2_listeners);
+        assert!(!new_conf.events_observers.is_empty());
 
         let node_1_sk = Secp256k1PrivateKey::from_seed(&self.conf.node.local_peer_seed);
         let node_1_pk = StacksPublicKey::from_private(&node_1_sk);
@@ -12472,36 +12495,21 @@ impl Command for BootSecondaryMinerToNakamotoCommand {
             self.conf.burnchain.chain_id,
             self.conf.burnchain.peer_version,
         );
-        // let http_origin = format!("http://{}", &self.conf.node.rpc_bind);
 
-        let mut nakamoto_run_loop = boot_nakamoto::BootRunLoop::new(new_conf.clone()).unwrap();
-        let rl_stopper = nakamoto_run_loop.get_termination_switch();
-        // let rl_coord_channels = nakamoto_run_loop.coordinator_channels();
-        // let Counters {
-        //     naka_submitted_commits: rl2_commits,
-        //     naka_skip_commit_op: rl2_skip_commit_op,
-        //     naka_mined_blocks: blocks_mined2,
-        //     ..
-        // } = nakamoto_run_loop.counters();
+        let nakamoto_run_loop = boot_nakamoto::BootRunLoop::new(new_conf.clone()).unwrap();
         let rl_counters = nakamoto_run_loop.counters();
 
-        let rl_thread = thread::Builder::new()
-            .name("run_loop_2".into())
-            .spawn(move || nakamoto_run_loop.start(None, 0))
-            .unwrap();
-
-        // TODO: Figure out assertion here.
-
-        state.boot_secondary_miner_to_nakamoto(
+        state.create_secondary_miner_run_loop(
             &self.miner_seed,
-            rl_thread,
-            rl_stopper,
+            nakamoto_run_loop,
             rl_counters,
+            self.rpc_port,
+            self.p2p_port,
         );
     }
 
     fn label(&self) -> String {
-        format!("BOOT_TO_NAKAMOTO({:?})", self.miner_seed)
+        format!("CREATE_RUN_LOOP({:?})", self.miner_seed)
     }
 
     fn build(ctx: &TestContext) -> impl Strategy<Value = CommandWrapper> {
@@ -12512,11 +12520,151 @@ impl Command for BootSecondaryMinerToNakamotoCommand {
             Just(ctx.signer_test.lock().unwrap().running_nodes.conf.clone()),
         )
             .prop_map(|(miner_seed, rpc_port, p2p_port, conf)| {
-                CommandWrapper::new(BootSecondaryMinerToNakamotoCommand::new(
+                CommandWrapper::new(CreateSecondaryMinerRunLoopCommand::new(
                     &miner_seed,
                     rpc_port,
                     p2p_port,
                     conf,
+                ))
+            })
+    }
+}
+
+struct StartSecondaryMinerRunLoopCommand {
+    miner_seed: MinerSeed,
+}
+
+impl StartSecondaryMinerRunLoopCommand {
+    pub fn new(miner_seed: &[u8]) -> Self {
+        Self {
+            miner_seed: miner_seed.to_vec(),
+        }
+    }
+}
+
+impl Command for StartSecondaryMinerRunLoopCommand {
+    fn check(&self, state: &State) -> bool {
+        // Check if we have an unstarted run loop for this miner
+        state.unstarted_run_loops.contains_key(&self.miner_seed)
+    }
+
+    fn apply(&self, state: &mut State) {
+        println!("Starting run loop for miner {:?}", self.miner_seed);
+
+        let (mut run_loop, counters) = state
+            .unstarted_run_loops
+            .remove(&self.miner_seed)
+            .expect("Run loop should exist");
+
+        let rl_stopper = run_loop.get_termination_switch();
+
+        let rl_thread = thread::Builder::new()
+            .name(format!("run_loop_{:?}", &self.miner_seed))
+            .spawn(move || run_loop.start(None, 0))
+            .unwrap();
+
+        state.boot_secondary_miner_to_nakamoto(&self.miner_seed, rl_thread, rl_stopper, counters);
+    }
+
+    fn label(&self) -> String {
+        format!("START_RUN_LOOP({:?})", self.miner_seed)
+    }
+
+    fn build(ctx: &TestContext) -> impl Strategy<Value = CommandWrapper> {
+        proptest::sample::select(ctx.miner_seeds[1..].to_vec())
+            .prop_map(|seed| CommandWrapper::new(StartSecondaryMinerRunLoopCommand::new(&seed)))
+    }
+}
+
+struct WaitForNodesSyncCommand {
+    primary_miner_seed: MinerSeed,
+    secondary_miner_seed: MinerSeed,
+    primary_conf: Config,
+    timeout_secs: u64,
+}
+
+impl WaitForNodesSyncCommand {
+    pub fn new(
+        primary_miner_seed: &[u8],
+        secondary_miner_seed: &[u8],
+        primary_conf: Config,
+        timeout_secs: u64,
+    ) -> Self {
+        Self {
+            primary_miner_seed: primary_miner_seed.to_vec(),
+            secondary_miner_seed: secondary_miner_seed.to_vec(),
+            primary_conf,
+            timeout_secs,
+        }
+    }
+}
+
+impl Command for WaitForNodesSyncCommand {
+    fn check(&self, state: &State) -> bool {
+        // Check if both miners are booted to Nakamoto and the secondary miner
+        // has its ports stored in the state.
+        state
+            .miners_booted_to_nakamoto
+            .contains(&self.primary_miner_seed)
+            && state
+                .miners_booted_to_nakamoto
+                .contains(&self.secondary_miner_seed)
+            && state
+                .secondary_node_ports
+                .contains_key(&self.secondary_miner_seed)
+    }
+
+    fn apply(&self, state: &mut State) {
+        println!("Waiting for nodes to synchronize...");
+
+        // Get the secondary miner's ports from the state
+        let (secondary_rpc_port, _) = state
+            .secondary_node_ports
+            .get(&self.secondary_miner_seed)
+            .expect("Secondary node ports should exist in state");
+
+        let primary_conf = &self.primary_conf;
+
+        // Create secondary config using the stored RPC port
+        let mut secondary_conf = primary_conf.clone();
+        secondary_conf.node.rpc_bind = format!("127.0.0.1:{}", secondary_rpc_port);
+
+        println!("Waiting for node sync between primary and secondary miners...");
+
+        wait_for(self.timeout_secs, || {
+            let Some(node_1_info) = get_chain_info_opt(primary_conf) else {
+                return Ok(false);
+            };
+            let Some(node_2_info) = get_chain_info_opt(&secondary_conf) else {
+                return Ok(false);
+            };
+            Ok(node_1_info.stacks_tip_height == node_2_info.stacks_tip_height)
+        })
+        .expect("Timed out waiting for bootstrapped node to catch up to the miner");
+
+        println!("Nodes synchronized successfully");
+    }
+
+    fn label(&self) -> String {
+        format!(
+            "WAIT_FOR_SYNC({:?}, {:?})",
+            self.primary_miner_seed, self.secondary_miner_seed
+        )
+    }
+
+    fn build(ctx: &TestContext) -> impl Strategy<Value = CommandWrapper> {
+        (
+            Just(ctx.miner_seeds[0].clone()),
+            proptest::sample::select(ctx.miner_seeds[1..].to_vec()),
+            Just(ctx.signer_test.lock().unwrap().running_nodes.conf.clone()),
+            Just(120u64), // Default timeout of 120 seconds
+        )
+            .prop_map(|(primary_seed, secondary_seed, conf, timeout)| {
+                CommandWrapper::new(WaitForNodesSyncCommand::new(
+                    &primary_seed,
+                    &secondary_seed,
+                    conf,
+                    timeout,
                 ))
             })
     }
@@ -12581,7 +12729,7 @@ fn stateful_test() {
     let miner_seeds = vec![vec![1, 1, 1, 1], vec![2, 2, 2, 2]];
     let nodes_rpc_ports = vec![gen_random_port(), gen_random_port()];
     let nodes_p2p_ports = vec![gen_random_port(), gen_random_port()];
-    let num_signers = 2;
+    let num_signers = 5;
     let max_nakamoto_tenures = 30;
     let send_amt = 100;
     let send_fee = 180;
@@ -12602,12 +12750,14 @@ fn stateful_test() {
         test_context,
         [
             BootPrimaryMinerToNakamotoCommand,
-            BootSecondaryMinerToNakamotoCommand,
+            CreateSecondaryMinerRunLoopCommand,
+            StartSecondaryMinerRunLoopCommand,
             SkipCommitOpSecondaryMinerCommand,
-            SkipCommitOpPrimaryMinerCommand
+            SkipCommitOpPrimaryMinerCommand,
+            WaitForNodesSyncCommand
         ],
-        1, // Min
-        16 // Max
+        1,  // Min
+        16  // Max
     );
 }
 
@@ -12616,7 +12766,7 @@ fn hardcoded_integration_test_using_commands() {
     let miner_seeds = vec![vec![1, 1, 1, 1], vec![2, 2, 2, 2]];
     let nodes_rpc_ports = vec![gen_random_port(), gen_random_port()];
     let nodes_p2p_ports = vec![gen_random_port(), gen_random_port()];
-    let num_signers = 2;
+    let num_signers = 5;
     let max_nakamoto_tenures = 30;
     let send_amt = 100;
     let send_fee = 180;
@@ -12635,8 +12785,8 @@ fn hardcoded_integration_test_using_commands() {
 
     let mut state = State::new();
 
-    // **Step 1: Boot secondary miner to Nakamoto**
-    let miner_2_boot_nakamoto = BootSecondaryMinerToNakamotoCommand::new(
+    // Step 1: Create secondary miner run loop.
+    let create_runloop = CreateSecondaryMinerRunLoopCommand::new(
         &test_context.miner_seeds[1],
         test_context.nodes_rpc_ports[1],
         test_context.nodes_p2p_ports[1],
@@ -12648,33 +12798,54 @@ fn hardcoded_integration_test_using_commands() {
             .conf
             .clone(),
     );
+    assert!(create_runloop.check(&state));
+    create_runloop.apply(&mut state);
 
-    assert!(miner_2_boot_nakamoto.check(&state));
+    // Step 2: Skip commit operation for secondary miner.
+    //
+    // This matches the original test's "Pause Miner 2's Block Commits" step.
+    let skip_commit_op = SkipCommitOpSecondaryMinerCommand::new(&test_context.miner_seeds[1]);
+    assert!(skip_commit_op.check(&state));
+    skip_commit_op.apply(&mut state);
 
-    miner_2_boot_nakamoto.apply(&mut state);
+    // Step 3: Start secondary miner run loop.
+    let start_runloop = StartSecondaryMinerRunLoopCommand::new(&test_context.miner_seeds[1]);
+    assert!(start_runloop.check(&state));
+    start_runloop.apply(&mut state);
 
-    // **Step 2: Boot primary miner to Nakamoto**
+    // Step 4: Boot primary miner to Nakamoto.
+    //
+    // This matches the original test's "Boot to Epoch 3.0" step.
     let miner_1_boot_nakamoto = BootPrimaryMinerToNakamotoCommand::new(
         &test_context.miner_seeds[0],
         test_context.signer_test.clone(),
     );
-
     assert!(miner_1_boot_nakamoto.check(&state));
-
     miner_1_boot_nakamoto.apply(&mut state);
 
-    // **Step 2: Skip commit operation for secondary miner**
-    let skip_commit_op = SkipCommitOpSecondaryMinerCommand::new(&test_context.miner_seeds[1]);
+    // Step 5: Wait for nodes to sync.
+    let wait_for_sync = WaitForNodesSyncCommand::new(
+        &test_context.miner_seeds[0],
+        &test_context.miner_seeds[1],
+        test_context
+            .signer_test
+            .lock()
+            .unwrap()
+            .running_nodes
+            .conf
+            .clone(),
+        120, // 120 second timeout, as in the original test
+    );
+    assert!(wait_for_sync.check(&state));
+    wait_for_sync.apply(&mut state);
 
-    assert!(skip_commit_op.check(&state)); // Ensure skip operation is valid
-    skip_commit_op.apply(&mut state); // Apply the skip commit operation
-
-    // **Step 3: Verify state updates**
+    // Check that commit operations were skipped for the secondary miner.
     assert!(state
         .miner_commits_skipped
         .get(&test_context.miner_seeds[1])
         .unwrap_or(&false));
 
+    // Check that the run loop is running and has skip_commit_op set
     if let Some(run_loop) = state
         .miner_nakamoto_run_loops
         .get(&test_context.miner_seeds[1])
@@ -12684,5 +12855,13 @@ fn hardcoded_integration_test_using_commands() {
         panic!("Miner 2 run loop should be present in state!");
     }
 
-    println!("Test passed: Booted miner and skipped commit operation.");
+    // Check that both miners are booted to Nakamoto
+    assert!(state
+        .miners_booted_to_nakamoto
+        .contains(&test_context.miner_seeds[0]));
+    assert!(state
+        .miners_booted_to_nakamoto
+        .contains(&test_context.miner_seeds[1]));
+
+    println!("Test completed successfully!");
 }
