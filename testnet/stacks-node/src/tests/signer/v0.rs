@@ -12393,6 +12393,7 @@ impl Command for BootPrimaryMinerToNakamotoCommand {
             .miners_booted_to_nakamoto
             .get(&self.miner_seed)
             .is_none()
+            && !state.miner_nakamoto_run_loops.is_empty()
     }
 
     fn apply(&self, state: &mut State) {
