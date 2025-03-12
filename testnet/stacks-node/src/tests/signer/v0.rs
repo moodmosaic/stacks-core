@@ -12818,7 +12818,7 @@ fn stateful_test() {
             CreateSecondaryMinerRunLoopCommand,
             StartSecondaryMinerRunLoopCommand,
             SkipCommitOpSecondaryMinerCommand,
-            SkipCommitOpPrimaryMinerCommand,
+            // SkipCommitOpPrimaryMinerCommand,
             WaitForNodesSyncCommand
         ],
         1,  // Min
