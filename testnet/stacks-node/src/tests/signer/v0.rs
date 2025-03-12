@@ -12515,8 +12515,8 @@ impl Command for CreateSecondaryMinerRunLoopCommand {
     fn build(ctx: &TestContext) -> impl Strategy<Value = CommandWrapper> {
         (
             proptest::sample::select(ctx.miner_seeds[1..].to_vec()),
-            (1u16..65535),
-            (1u16..65535),
+            proptest::sample::select(ctx.nodes_rpc_ports[1..].to_vec()),
+            proptest::sample::select(ctx.nodes_p2p_ports[1..].to_vec()),
             Just(ctx.signer_test.lock().unwrap().running_nodes.conf.clone()),
         )
             .prop_map(|(miner_seed, rpc_port, p2p_port, conf)| {
