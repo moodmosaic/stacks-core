@@ -12332,10 +12332,7 @@ impl Command for SkipCommitOpSecondaryMinerCommand {
     fn check(&self, state: &State) -> bool {
         // Check if the miner has a run loop (whether started or not) and has
         // not already skipped the commit operations.
-        (state
-            .miner_nakamoto_run_loops
-            .contains_key(&self.miner_seed)
-            || state.unstarted_run_loops.contains_key(&self.miner_seed))
+        state.unstarted_run_loops.contains_key(&self.miner_seed)
             && !state
                 .miner_commits_skipped
                 .get(&self.miner_seed)
