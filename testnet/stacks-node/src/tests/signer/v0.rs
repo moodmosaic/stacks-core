@@ -12281,6 +12281,14 @@ impl SkipCommitOpPrimaryMinerCommand {
 
 impl Command for SkipCommitOpPrimaryMinerCommand {
     fn check(&self, state: &State) -> bool {
+        println!(
+            "Checking: Skipping commit operations for miner {:?}. Result: {:?}",
+            self.miner_seed,
+            !state
+                .miner_commits_skipped
+                .get(&self.miner_seed)
+                .unwrap_or(&false)
+        );
         // Check if the miner has not already skipped the commit operations.
         !state
             .miner_commits_skipped
@@ -12289,7 +12297,10 @@ impl Command for SkipCommitOpPrimaryMinerCommand {
     }
 
     fn apply(&self, state: &mut State) {
-        println!("Skipping commit operations for miner {:?}", self.miner_seed);
+        println!(
+            "Applying: Skipping commit operations for miner {:?}",
+            self.miner_seed
+        );
 
         self.signer_test
             .lock()
@@ -12330,6 +12341,15 @@ impl SkipCommitOpSecondaryMinerCommand {
 
 impl Command for SkipCommitOpSecondaryMinerCommand {
     fn check(&self, state: &State) -> bool {
+        println!(
+            "Checking: Skipping commit operations for miner {:?}. Result: {:?} && {:?}",
+            self.miner_seed,
+            state.unstarted_run_loops.contains_key(&self.miner_seed),
+            !state
+                .miner_commits_skipped
+                .get(&self.miner_seed)
+                .unwrap_or(&false)
+        );
         // Check if the miner has a run loop (whether started or not) and has
         // not already skipped the commit operations.
         state.unstarted_run_loops.contains_key(&self.miner_seed)
@@ -12340,7 +12360,10 @@ impl Command for SkipCommitOpSecondaryMinerCommand {
     }
 
     fn apply(&self, state: &mut State) {
-        println!("Skipping commit operations for miner {:?}", self.miner_seed);
+        println!(
+            "Applying: Skipping commit operations for miner {:?}",
+            self.miner_seed
+        );
 
         if let Some(run_loop) = state.miner_nakamoto_run_loops.get_mut(&self.miner_seed) {
             run_loop.rl_counters.naka_skip_commit_op.set(true);
@@ -12385,6 +12408,15 @@ impl BootPrimaryMinerToNakamotoCommand {
 
 impl Command for BootPrimaryMinerToNakamotoCommand {
     fn check(&self, state: &State) -> bool {
+        println!(
+            "Checking: Booting primary miner {:?} to Nakamoto. Result: {:?} && {:?}",
+            self.miner_seed,
+            state
+                .miners_booted_to_nakamoto
+                .get(&self.miner_seed)
+                .is_none(),
+            !state.miner_nakamoto_run_loops.is_empty()
+        );
         // Check if the miner is not already booted to Nakamoto.
         state
             .miners_booted_to_nakamoto
@@ -12394,7 +12426,7 @@ impl Command for BootPrimaryMinerToNakamotoCommand {
     }
 
     fn apply(&self, state: &mut State) {
-        println!("Miner {:?} booting to Nakamoto", self.miner_seed);
+        println!("Applying: Miner {:?} booting to Nakamoto", self.miner_seed);
 
         let mut signer_test = self.signer_test.lock().unwrap();
         signer_test.boot_to_epoch_3();
@@ -12435,6 +12467,14 @@ impl CreateSecondaryMinerRunLoopCommand {
 
 impl Command for CreateSecondaryMinerRunLoopCommand {
     fn check(&self, state: &State) -> bool {
+        println!(
+            "Checking: Creating run loop for miner {:?}. Result: {:?} && {:?}",
+            self.miner_seed,
+            !state.unstarted_run_loops.contains_key(&self.miner_seed),
+            !state
+                .miner_nakamoto_run_loops
+                .contains_key(&self.miner_seed)
+        );
         // Check if run loop doesn't already exist for this miner and the miner
         // is not already booted to Nakamoto.
         !state.unstarted_run_loops.contains_key(&self.miner_seed)
@@ -12444,7 +12484,11 @@ impl Command for CreateSecondaryMinerRunLoopCommand {
     }
 
     fn apply(&self, state: &mut State) {
-        println!("Creating run loop for miner {:?}", self.miner_seed);
+        println!(
+            "Applying: Creating run loop for miner {:?}",
+            self.miner_seed
+        );
+        println!("Ports: RPC {:?}, P2P {:?}", self.rpc_port, self.p2p_port);
 
         let btc_miner_pk = Keychain::default(self.miner_seed.clone()).get_pub_key();
         let mut new_conf = self.conf.clone();
@@ -12542,12 +12586,20 @@ impl StartSecondaryMinerRunLoopCommand {
 
 impl Command for StartSecondaryMinerRunLoopCommand {
     fn check(&self, state: &State) -> bool {
+        println!(
+            "Checking: Starting run loop for miner {:?}. Result: {:?}",
+            self.miner_seed,
+            state.unstarted_run_loops.contains_key(&self.miner_seed)
+        );
         // Check if we have an unstarted run loop for this miner
         state.unstarted_run_loops.contains_key(&self.miner_seed)
     }
 
     fn apply(&self, state: &mut State) {
-        println!("Starting run loop for miner {:?}", self.miner_seed);
+        println!(
+            "Applying: Starting run loop for miner {:?}",
+            self.miner_seed
+        );
 
         let (mut run_loop, counters) = state
             .unstarted_run_loops
@@ -12599,6 +12651,18 @@ impl WaitForNodesSyncCommand {
 
 impl Command for WaitForNodesSyncCommand {
     fn check(&self, state: &State) -> bool {
+        println!(
+            "Checking: Waiting for nodes to synchronize. Result: {:?} && {:?} && {:?}",
+            state
+                .miners_booted_to_nakamoto
+                .contains(&self.primary_miner_seed),
+            state
+                .miners_booted_to_nakamoto
+                .contains(&self.secondary_miner_seed),
+            state
+                .secondary_node_ports
+                .contains_key(&self.secondary_miner_seed)
+        );
         // Check if both miners are booted to Nakamoto and the secondary miner
         // has its ports stored in the state.
         state
@@ -12613,7 +12677,7 @@ impl Command for WaitForNodesSyncCommand {
     }
 
     fn apply(&self, state: &mut State) {
-        println!("Waiting for nodes to synchronize...");
+        println!("Applying: Waiting for nodes to synchronize...");
 
         // Get the secondary miner's ports from the state
         let (secondary_rpc_port, _) = state
@@ -12732,6 +12796,9 @@ fn stateful_test() {
     let send_amt = 100;
     let send_fee = 180;
     let num_txs = 3;
+
+    println!("RPC Ports: {:?}", nodes_rpc_ports);
+    println!("P2P Ports: {:?}", nodes_p2p_ports);
 
     let test_context = TestContext::new(
         miner_seeds,
