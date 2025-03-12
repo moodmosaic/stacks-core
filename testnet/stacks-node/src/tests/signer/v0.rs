@@ -12789,6 +12789,8 @@ macro_rules! madhouse {
 #[test]
 fn stateful_test() {
     let miner_seeds = vec![vec![1, 1, 1, 1], vec![2, 2, 2, 2]];
+    // TODO: These randmoly generated ports cannot currently be reproduced
+    // using the seed. We need a way to generate deterministic random ports.
     let nodes_rpc_ports = vec![gen_random_port(), gen_random_port()];
     let nodes_p2p_ports = vec![gen_random_port(), gen_random_port()];
     let num_signers = 5;
