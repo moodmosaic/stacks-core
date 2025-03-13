@@ -12654,6 +12654,8 @@ impl WaitForNodesSyncCommand {
     }
 }
 
+// TODO: Decide if this command's apply method's content should be part of
+// BootPrimaryMinerToNakamotoCommand.
 impl Command for WaitForNodesSyncCommand {
     fn check(&self, state: &State) -> bool {
         println!(
