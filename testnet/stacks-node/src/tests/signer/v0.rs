@@ -12282,18 +12282,23 @@ impl SkipCommitOpPrimaryMinerCommand {
 impl Command for SkipCommitOpPrimaryMinerCommand {
     fn check(&self, state: &State) -> bool {
         println!(
-            "Checking: Skipping commit operations for miner {:?}. Result: {:?}",
+            "Checking: Skipping commit operations for miner {:?}. Result: {:?} && {:?}",
             self.miner_seed,
             !state
                 .miner_commits_skipped
                 .get(&self.miner_seed)
-                .unwrap_or(&false)
+                .unwrap_or(&false),
+            state.miners_booted_to_nakamoto.contains(&self.miner_seed)
         );
         // Check if the miner has not already skipped the commit operations.
         !state
             .miner_commits_skipped
             .get(&self.miner_seed)
             .unwrap_or(&false)
+            // TODO: This check is added to mimic the behaviour of the ported
+            // test. Check if this is necesary and update with the proper
+            // condition.
+            && state.miners_booted_to_nakamoto.contains(&self.miner_seed)
     }
 
     fn apply(&self, state: &mut State) {
@@ -12820,7 +12825,7 @@ fn stateful_test() {
             CreateSecondaryMinerRunLoopCommand,
             StartSecondaryMinerRunLoopCommand,
             SkipCommitOpSecondaryMinerCommand,
-            // SkipCommitOpPrimaryMinerCommand,
+            SkipCommitOpPrimaryMinerCommand,
             WaitForNodesSyncCommand
         ],
         1,  // Min
@@ -12871,9 +12876,10 @@ fn hardcoded_integration_test_using_commands() {
     // Step 2: Skip commit operation for secondary miner.
     //
     // This matches the original test's "Pause Miner 2's Block Commits" step.
-    let skip_commit_op = SkipCommitOpSecondaryMinerCommand::new(&test_context.miner_seeds[1]);
-    assert!(skip_commit_op.check(&state));
-    skip_commit_op.apply(&mut state);
+    let skip_commit_op_secondary_miner =
+        SkipCommitOpSecondaryMinerCommand::new(&test_context.miner_seeds[1]);
+    assert!(skip_commit_op_secondary_miner.check(&state));
+    skip_commit_op_secondary_miner.apply(&mut state);
 
     // Step 3: Start secondary miner run loop.
     let start_runloop = StartSecondaryMinerRunLoopCommand::new(&test_context.miner_seeds[1]);
@@ -12929,6 +12935,16 @@ fn hardcoded_integration_test_using_commands() {
     assert!(state
         .miners_booted_to_nakamoto
         .contains(&test_context.miner_seeds[1]));
+
+    // Step 6: Pause commit operations for primary miner.
+    //
+    // This matches the original test's "Pause Miner 1's Block Commits" step.
+    let skip_commit_op_primary_miner = SkipCommitOpPrimaryMinerCommand::new(
+        &test_context.miner_seeds[0],
+        test_context.signer_test.clone(),
+    );
+    assert!(skip_commit_op_primary_miner.check(&state));
+    skip_commit_op_primary_miner.apply(&mut state);
 
     println!("Test completed successfully!");
 }
