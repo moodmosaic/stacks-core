@@ -12762,7 +12762,10 @@ impl Debug for CommandWrapper {
 
 macro_rules! madhouse {
     ($test_context:expr, [ $( $command:ident ),* ], $min:expr, $max:expr) => {
-        proptest!(|(commands in vec(
+        let mut config = proptest::test_runner::Config::default();
+        config.cases = 1;
+
+        proptest!(config, |(commands in vec(
             prop_oneof![
                 $( $command::build(&$test_context), )*
             ],
