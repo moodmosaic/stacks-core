@@ -12087,7 +12087,6 @@ fn mark_miner_as_invalid_if_reorg_is_rejected() {
 }
 
 use std::fmt::{Debug, Formatter, Result as FmtResult};
-use std::sync::Arc;
 
 #[cfg(test)]
 use proptest::collection::vec;
@@ -12311,7 +12310,8 @@ impl Command for SkipCommitOpPrimaryMinerCommand {
             .lock()
             .unwrap()
             .running_nodes
-            .nakamoto_test_skip_commit_op
+            .counters
+            .naka_skip_commit_op
             .set(true);
 
         state
