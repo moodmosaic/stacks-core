@@ -12111,13 +12111,7 @@ fn mark_miner_as_invalid_if_reorg_is_rejected() {
 }
 
 use std::fmt::{Debug, Formatter, Result as FmtResult};
-
-#[cfg(test)]
-use proptest::collection::vec;
 use proptest::prelude::{Just, Strategy};
-#[cfg(test)]
-use proptest::prop_oneof;
-use proptest::proptest;
 
 pub struct TestContext {
     miners: Arc<Mutex<MultipleMinerTest>>,
@@ -12825,42 +12819,6 @@ impl Command for SendTransferTxCommand {
     }
 }
 
-macro_rules! madhouse {
-    ($test_context:expr, [ $( $command:ident ),* ], $min:expr, $max:expr) => {
-        let mut config = proptest::test_runner::Config::default();
-        config.cases = 1;
-
-        proptest!(config, |(commands in vec(
-            prop_oneof![
-                $( $command::build(&$test_context), )*
-            ],
-            $min..$max,
-        ))| {
-            println!("\n=== New Test Run ===\n");
-
-            let mut state = State::new();
-            let mut executed_commands = Vec::with_capacity(commands.len());
-
-            for cmd in &commands {
-                if cmd.command.check(&state) {
-                    cmd.command.apply(&mut state);
-                    executed_commands.push(cmd);
-                }
-            }
-
-            println!("\nSelected commands:\n");
-            for command in &commands {
-                println!("{:?}", command);
-            }
-
-            println!("\nExecuted commands:\n");
-            for command in &executed_commands {
-                println!("{:?}", command);
-            }
-        });
-    };
-}
-
 #[test]
 fn allow_reorg_within_first_proposal_burn_block_timing_secs_commands() {
     let num_signers = 5;
@@ -12975,35 +12933,3 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs_commands() {
 
     println!("Test completed successfully!");
 }
-
-// #[test]
-// fn stateful_test() {
-//     let num_signers = 5;
-//     let num_transfer_txs = 3;
-
-//     let test_context = TestContext::new(num_signers, num_transfer_txs);
-
-//     madhouse!(
-//         test_context,
-//         [
-//             SkipCommitOpSecondaryMiner,
-//             BootToEpoch3,
-//             SkipCommitOpPrimaryMiner,
-//             MineBitcoinBlockTenureChangePrimaryMinerCommand,
-//             SubmitBlockCommitSecondaryMinerCommand,
-//             StallMiningCommand,
-//             MineTenureCommand,
-//             SubmitBlockCommitPrimaryMinerCommand,
-//             RecoverFromStallCommand,
-//             WaitForBlockFromMiner2Command,
-//             MineTenureCommand,
-//             WaitForBlockFromMiner1Command,
-//             SubmitBlockCommitPrimaryMinerCommand,
-//             SendTransferTxCommand,
-//             WaitForBlockFromMiner1Command,
-//             MineBitcoinBlockTenureChangePrimaryMinerCommand
-//         ],
-//         1,  // Min
-//         16  // Max
-//     );
-// }
