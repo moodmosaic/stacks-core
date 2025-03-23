@@ -12819,6 +12819,43 @@ impl Command for SendTransferTxCommand {
     }
 }
 
+struct ShutdownMinersCommand {
+    miners: Arc<Mutex<MultipleMinerTest>>,
+}
+
+impl ShutdownMinersCommand {
+    pub fn new(miners: Arc<Mutex<MultipleMinerTest>>) -> Self {
+        Self { miners }
+    }
+}
+
+impl Command for ShutdownMinersCommand {
+    fn check(&self, _state: &State) -> bool {
+        println!("Checking: Shutting down miners. Result: {:?}", true);
+        true
+    }
+
+    fn apply(&self, _state: &mut State) {
+        println!("Applying: Shutting down miners");
+
+        if let Ok(miners_arc) = Arc::try_unwrap(self.miners.clone()) {
+            if let Ok(miners) = miners_arc.into_inner() {
+                miners.shutdown();
+            }
+        }
+    }
+
+    fn label(&self) -> String {
+        "SHUTDOWN_MINERS".to_string()
+    }
+
+    fn build(ctx: &TestContext) -> impl Strategy<Value = CommandWrapper> {
+        Just(CommandWrapper::new(ShutdownMinersCommand::new(
+            ctx.miners.clone(),
+        )))
+    }
+}
+
 #[test]
 fn allow_reorg_within_first_proposal_burn_block_timing_secs_commands() {
     let num_signers = 5;
@@ -12930,6 +12967,10 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs_commands() {
         MineBitcoinBlockTenureChangePrimaryMinerCommand::new(test_context.miners.clone());
     assert!(mine_nakamoto_block_primary_miner_n_3.check(&state));
     mine_nakamoto_block_primary_miner_n_3.apply(&mut state);
+
+    let shutdown_miners = ShutdownMinersCommand::new(test_context.miners.clone());
+    assert!(shutdown_miners.check(&state));
+    shutdown_miners.apply(&mut state);
 
     println!("Test completed successfully!");
 }
