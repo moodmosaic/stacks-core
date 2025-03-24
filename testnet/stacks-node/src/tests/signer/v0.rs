@@ -12123,7 +12123,6 @@ impl TestContext {
             num_signers,
             num_transfer_txs,
             |signer_config| {
-                // Lets make sure we never time out since we need to stall some things to force our scenario
                 signer_config.block_proposal_validation_timeout = Duration::from_secs(1800);
                 signer_config.tenure_last_block_proposal_timeout = Duration::from_secs(1800);
                 signer_config.first_proposal_burn_block_timing = Duration::from_secs(1800);
