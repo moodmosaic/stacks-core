@@ -12112,6 +12112,7 @@ fn mark_miner_as_invalid_if_reorg_is_rejected() {
 
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use proptest::prelude::{Just, Strategy};
+use proptest::strategy::ValueTree;
 
 pub struct TestContext {
     miners: Arc<Mutex<MultipleMinerTest>>,
@@ -12972,4 +12973,95 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs_commands() {
     shutdown_miners.apply(&mut state);
 
     println!("Test completed successfully!");
+}
+
+// Executes commands that pass their check, logs them, and returns the executed ones.
+// NOTE: This should be refactored into a more SOLID style, perhaps using decorators.
+pub fn execute_commands<'a>(
+    commands: &'a [CommandWrapper],
+    state: &mut State,
+) -> Vec<&'a CommandWrapper> {
+    let mut executed = Vec::with_capacity(commands.len());
+    let mut execution_times = Vec::with_capacity(commands.len());
+
+    // ANSI color codes.
+    let yellow = "\x1b[33m";
+    let green = "\x1b[32m";
+    let reset = "\x1b[0m";
+
+    for cmd in commands {
+        if cmd.command.check(state) {
+            let start = Instant::now();
+            cmd.command.apply(state);
+            let duration = start.elapsed();
+            executed.push(cmd);
+            execution_times.push(duration);
+        }
+    }
+
+    println!("Selected:");
+    for (i, cmd) in commands.iter().enumerate() {
+        println!("{:02}. {}{}{}", i + 1, yellow, cmd.command.label(), reset);
+    }
+
+    println!("Executed:");
+    for (i, (cmd, time)) in executed.iter().zip(execution_times.iter()).enumerate() {
+        println!(
+            "{:02}. {}{}{} ({:.2?})",
+            i + 1,
+            green,
+            cmd.command.label(),
+            reset,
+            time
+        );
+    }
+
+    executed
+}
+
+macro_rules! scenario {
+    ($test_context:expr, [ $( $command:ident ),* ]) => {
+        let config = proptest::test_runner::Config {
+            cases: 1,
+            ..Default::default()
+        };
+
+        let mut test_runner = proptest::test_runner::TestRunner::new(config);
+        let mut commands = Vec::new();
+
+        $(
+            if let Ok(value) = $command::build(&$test_context).new_tree(&mut test_runner).map(|v| v.current()) {
+                commands.push(value);
+            }
+        )*
+
+        let mut state = State::new();
+        execute_commands(&commands, &mut state);
+    };
+}
+
+#[test]
+fn allow_reorg_within_first_proposal_burn_block_timing_secs_scenario() {
+    let num_signers = 5;
+    let num_transfer_txs = 3;
+
+    let ctx = TestContext::new(num_signers, num_transfer_txs);
+
+    scenario!(ctx, [
+        SkipCommitOpSecondaryMiner,
+        BootToEpoch3,
+        SkipCommitOpPrimaryMiner,
+        MineBitcoinBlockTenureChangePrimaryMinerCommand,
+        SubmitBlockCommitSecondaryMinerCommand,
+        MineTenureCommand,
+        SubmitBlockCommitPrimaryMinerCommand,
+        WaitForBlockFromMiner2Command,
+        MineTenureCommand,
+        WaitForBlockFromMiner1Command,
+        SubmitBlockCommitPrimaryMinerCommand,
+        SendTransferTxCommand,
+        WaitForBlockFromMiner1Command,
+        MineBitcoinBlockTenureChangePrimaryMinerCommand,
+        ShutdownMinersCommand
+    ]);
 }
