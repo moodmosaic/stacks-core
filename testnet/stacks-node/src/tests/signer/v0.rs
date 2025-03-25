@@ -12110,6 +12110,7 @@ fn mark_miner_as_invalid_if_reorg_is_rejected() {
     miners.shutdown();
 }
 
+use std::cell::RefCell;
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 use proptest::prelude::{Just, Strategy};
 use proptest::strategy::ValueTree;
@@ -13026,7 +13027,7 @@ macro_rules! scenario {
             ..Default::default()
         };
 
-        let mut test_runner = proptest::test_runner::TestRunner::new(config);
+        let mut test_runner = proptest::test_runner::TestRunner::new(config.clone());
         let mut commands = Vec::new();
 
         $(
@@ -13035,8 +13036,10 @@ macro_rules! scenario {
             }
         )*
 
-        let mut state = State::new();
-        execute_commands(&commands, &mut state);
+        let state = std::cell::RefCell::new(State::new());
+        proptest::proptest!(config, |(_seed in proptest::num::u64::ANY)| {
+            execute_commands(&commands.clone(), &mut *state.borrow_mut());
+        });
     };
 }
 
