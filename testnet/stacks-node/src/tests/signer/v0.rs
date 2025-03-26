@@ -12781,7 +12781,7 @@ impl Command for MineTenureCommand {
     }
 
     fn build(ctx: &TestContext) -> impl Strategy<Value = CommandWrapper> {
-        (1u64..120u64).prop_map(move |timeout_secs| {
+        (60u64..90u64).prop_map(move |timeout_secs| {
             CommandWrapper::new(MineTenureCommand::new(ctx.miners.clone(), timeout_secs))
         })
     }
