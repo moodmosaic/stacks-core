@@ -12978,7 +12978,7 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs_commands() {
 
 // Executes commands that pass their check, logs them, and returns the executed ones.
 // NOTE: This should be refactored into a more SOLID style, perhaps using decorators.
-pub fn execute_commands<'a>(
+fn execute_commands<'a>(
     commands: &'a [CommandWrapper],
     state: &mut State,
 ) -> Vec<&'a CommandWrapper> {
@@ -13028,17 +13028,87 @@ macro_rules! scenario {
         };
 
         let mut test_runner = proptest::test_runner::TestRunner::new(config.clone());
-        let mut commands = Vec::new();
+        let all_commands: Vec<CommandWrapper> = {
+            let mut cmds = Vec::new();
+            $(
+                match $command::build(&$test_context).new_tree(&mut test_runner) {
+                    Ok(tree) => cmds.push(tree.current()),
+                    Err(e) => panic!("Failed to build command {}: {:?}", stringify!($command), e),
+                }
+            )*
+            cmds
+        };
 
-        $(
-            if let Ok(value) = $command::build(&$test_context).new_tree(&mut test_runner).map(|v| v.current()) {
-                commands.push(value);
+        println!("\n=== Initial Command Sequence ===");
+        for (i, cmd) in all_commands.iter().enumerate() {
+            println!("{:02}. {}", i + 1, cmd.command.label());
+        }
+
+        // Use command labels as the strategy input to show in failure reports.
+        let command_info_strategy = {
+            use proptest::prelude::*;
+            // Create a vector of (index, label) pairs.
+            let command_info = all_commands.iter().enumerate()
+                .map(|(idx, cmd)| (idx, cmd.command.label()))
+                .collect::<Vec<_>>();
+
+            // Strategy that produces this fixed sequence.
+            Just(command_info)
+        };
+
+        let state = RefCell::new(State::new());
+        proptest::proptest!(config, |(command_info in command_info_strategy)| {
+            // Select commands using the indices.
+            let commands: Vec<CommandWrapper> = command_info.iter()
+                .map(|(idx, _)| all_commands[*idx].clone())
+                .collect();
+
+            // Print which commands we're executing.
+            println!("\n=== Selected Command Sequence ===");
+            for (i, (idx, label)) in command_info.iter().enumerate() {
+                println!("{:02}. {} (index {})", i + 1, label, idx);
             }
-        )*
 
-        let state = std::cell::RefCell::new(State::new());
-        proptest::proptest!(config, |(_seed in proptest::num::u64::ANY)| {
-            execute_commands(&commands.clone(), &mut *state.borrow_mut());
+            // Execute all commands.
+            let executed = execute_commands(&commands, &mut *state.borrow_mut());
+
+            // If not all commands executed, collect information about what failed.
+            if executed.len() < commands.len() {
+                // Create a report of executed vs failed commands.
+                let mut executed_labels = Vec::new();
+                let mut failed_labels = Vec::new();
+
+                // Track which commands were executed
+                let executed_indices = executed.iter()
+                    .map(|cmd| {
+                        all_commands.iter().position(|c|
+                            c.command.label() == cmd.command.label()
+                        ).unwrap_or(usize::MAX)
+                    })
+                    .collect::<std::collections::HashSet<_>>();
+
+                // Categorize each command.
+                for (idx, label) in &command_info {
+                    if executed_indices.contains(idx) {
+                        executed_labels.push(label.clone());
+                    } else {
+                        failed_labels.push(label.clone());
+                    }
+                }
+
+                // Build detailed error message.
+                let error_msg = format!(
+                    "Failed to execute all commands. Only {}/{} commands executed.\n\
+                     EXECUTED: {}\n\
+                     FAILED: {}",
+                    executed.len(),
+                    commands.len(),
+                    executed_labels.join(", "),
+                    failed_labels.join(", ")
+                );
+
+                proptest::prop_assert!(false, "{}", error_msg);
+            }
         });
     };
 }
