@@ -12544,7 +12544,7 @@ impl WaitForBlockFromMiner2Command {
 impl Command for WaitForBlockFromMiner2Command {
     fn check(&self, state: &State) -> bool {
         println!(
-            "Checking: Waiting for Nakamoto block from miner 1. Result: {:?}",
+            "Checking: Waiting for Nakamoto block from miner 2. Result: {:?}",
             !state.mining_stalled
         );
         // Check if mining is no longer stalled
