@@ -12758,7 +12758,10 @@ impl Command for MineTenureCommand {
     }
 
     fn apply(&self, _state: &mut State) {
-        println!("Applying: Mining tenure");
+        println!(
+            "Applying: Mining tenure and waiting for it for {:?} seconds",
+            self.timeout_secs
+        );
 
         let sortdb = {
             let miners = self.miners.lock().unwrap();
