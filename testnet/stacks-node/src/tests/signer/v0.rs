@@ -12110,10 +12110,10 @@ fn mark_miner_as_invalid_if_reorg_is_rejected() {
     miners.shutdown();
 }
 
-use std::cell::RefCell;
-use std::fmt::{Debug, Formatter, Result as FmtResult};
 use proptest::prelude::{Just, Strategy};
 use proptest::strategy::ValueTree;
+use std::cell::RefCell;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 
 pub struct TestContext {
     miners: Arc<Mutex<MultipleMinerTest>>,
@@ -13120,7 +13120,9 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs_scenario() {
 
     let ctx = TestContext::new(num_signers, num_transfer_txs);
 
-    scenario!(ctx, [
+    scenario!(
+        ctx,
+        [
         SkipCommitOpSecondaryMiner,
         BootToEpoch3,
         SkipCommitOpPrimaryMiner,
@@ -13136,5 +13138,6 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs_scenario() {
         WaitForBlockFromMiner1Command,
         MineBitcoinBlockTenureChangePrimaryMinerCommand,
         ShutdownMinersCommand
-    ]);
+        ]
+    );
 }
