@@ -12978,7 +12978,7 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs_commands() {
 }
 
 #[test]
-fn allow_reorg_within_first_proposal_burn_block_timing_secs_commands_madhouse() {
+fn allow_reorg_within_first_proposal_burn_block_timing_secs_madhouse() {
     let num_signers = 5;
     let num_transfer_txs = 3;
 
@@ -13029,4 +13029,70 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs_commands_madhouse() 
             println!("{:02}. {}", i + 1, cmd.command.label());
         }
     });
+}
+
+use proptest::strategy::ValueTree;
+
+#[test]
+fn allow_reorg_within_first_proposal_burn_block_timing_secs_scenario() {
+    let num_signers = 5;
+    let num_transfer_txs = 3;
+    let test_context = Arc::new(TestContext::new(num_signers, num_transfer_txs));
+    
+    // Create a config with fixed settings.
+    let config = proptest::test_runner::Config {
+        cases: 1,
+        max_shrink_iters: 0,
+        ..Default::default()
+    };
+    
+    // TODO: Try the deterministic runner.
+    // let mut runner = proptest::test_runner::TestRunner::deterministic();
+    // Alternatively, use default with the config.
+    let mut runner = proptest::test_runner::TestRunner::new(config);
+    
+    // Generate all commands in sequence using proptest's runner.
+    let commands = vec![
+        SkipCommitOpSecondaryMiner::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+        BootToEpoch3::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+        SkipCommitOpPrimaryMiner::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+        MineBitcoinBlockTenureChangePrimaryMinerCommand::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+        SubmitBlockCommitSecondaryMinerCommand::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+        StallMiningCommand::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+        MineTenureCommand::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+        SubmitBlockCommitPrimaryMinerCommand::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+        RecoverFromStallCommand::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+        WaitForBlockFromMiner2Command::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+        MineTenureCommand::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+        WaitForBlockFromMiner1Command::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+        SubmitBlockCommitPrimaryMinerCommand::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+        SendTransferTxCommand::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+        WaitForBlockFromMiner1Command::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+        MineBitcoinBlockTenureChangePrimaryMinerCommand::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+        ShutdownMinersCommand::build(test_context.clone()).new_tree(&mut runner).unwrap().current(),
+    ];
+    
+    println!("\n=== New Test Run ===\n");
+    let mut state = State::new();
+    let mut executed = Vec::with_capacity(commands.len());
+
+    for cmd in &commands {
+        if cmd.command.check(&state) {
+            cmd.command.apply(&mut state);
+            executed.push(cmd);
+        }
+    }
+
+    println!("Selected:");
+    for (i, cmd) in commands.iter().enumerate() {
+        println!("{:02}. {}", i + 1, cmd.command.label());
+    }
+
+    println!("Executed:");
+    for (i, cmd) in executed.iter().enumerate() {
+        println!("{:02}. {}", i + 1, cmd.command.label());
+    }
+    
+    // Optional: We can add assertions here to verify the test's outcome.
+    assert!(executed.len() > 0, "No commands were executed");
 }
