@@ -13031,6 +13031,20 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs_madhouse() {
     });
 }
 
+/// Creates a strategy that always returns a Vec containing values from all the
+/// provided strategies, in the exact order they were passed.
+///
+/// This is similar to `prop_oneof` but instead of randomly picking strategies,
+/// it includes values from all strategies in a Vec.
+///
+/// # Example
+///
+/// ```rust
+/// use proptest::prelude::*;
+///
+/// // Creates a strategy that returns vec![1, 2, 3].
+/// let all = prop_allof![Just(1), Just(2), Just(3)];
+/// ```
 macro_rules! prop_allof {
     ($strat:expr $(,)?) => {
         $strat.prop_map(|val| vec![val])
