@@ -13096,3 +13096,72 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs_scenario() {
     // Optional: We can add assertions here to verify the test's outcome.
     assert!(executed.len() > 0, "No commands were executed");
 }
+
+macro_rules! prop_allof {
+    ($strat:expr $(,)?) => {
+        $strat.prop_map(|val| vec![val])
+    };
+
+    ($first:expr, $($rest:expr),+ $(,)?) => {
+        {
+            let first_strat = $first.prop_map(|val| vec![val]);
+            let rest_strat = prop_allof!($($rest),+);
+
+            (first_strat, rest_strat).prop_map(|(mut first_vec, rest_vec)| {
+                first_vec.extend(rest_vec);
+                first_vec
+            })
+        }
+    };
+}
+
+#[test]
+fn allow_reorg_within_first_proposal_burn_block_timing_secs_slowhouse() {
+    let num_signers = 5;
+    let num_transfer_txs = 3;
+
+    let test_context = Arc::new(TestContext::new(num_signers, num_transfer_txs));
+
+    let config = proptest::test_runner::Config {
+        cases: 1,
+        max_shrink_iters: 0,
+        ..Default::default()
+    };
+
+    proptest::proptest!(config, |(commands in prop_allof![
+        SkipCommitOpSecondaryMiner::build(test_context.clone()),
+        BootToEpoch3::build(test_context.clone()),
+        SkipCommitOpPrimaryMiner::build(test_context.clone()),
+        MineBitcoinBlockTenureChangePrimaryMinerCommand::build(test_context.clone()),
+        SubmitBlockCommitSecondaryMinerCommand::build(test_context.clone()),
+        StallMiningCommand::build(test_context.clone()),
+        MineTenureCommand::build(test_context.clone()),
+        SubmitBlockCommitPrimaryMinerCommand::build(test_context.clone()),
+        RecoverFromStallCommand::build(test_context.clone()),
+        WaitForBlockFromMiner2Command::build(test_context.clone()),
+        WaitForBlockFromMiner1Command::build(test_context.clone()),
+        SendTransferTxCommand::build(test_context.clone()),
+        ShutdownMinersCommand::build(test_context.clone())
+    ])| {
+        println!("\n=== New Test Run ===\n");
+        let mut state = State::new();
+        let mut executed = Vec::with_capacity(commands.len());
+
+        for cmd in &commands {
+            if cmd.command.check(&state) {
+                cmd.command.apply(&mut state);
+                executed.push(cmd);
+            }
+        }
+
+        println!("Selected:");
+        for (i, cmd) in commands.iter().enumerate() {
+            println!("{:02}. {}", i + 1, cmd.command.label());
+        }
+
+        println!("Executed:");
+        for (i, cmd) in executed.iter().enumerate() {
+            println!("{:02}. {}", i + 1, cmd.command.label());
+        }
+    });
+}
