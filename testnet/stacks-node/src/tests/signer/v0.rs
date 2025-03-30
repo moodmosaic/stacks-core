@@ -13113,3 +13113,110 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs_slowhouse() {
         }
     });
 }
+
+/// Runs a test scenario with the given command types.
+///
+/// When MADHOUSE=1, uses `proptest::prop_oneof!` to randomly pick commands.
+/// Otherwise, uses the custom `prop_allof` to select all commands in order.
+///
+/// # Example
+///
+/// ```rust
+/// let test_context = Arc::new(TestContext::new(5, 3));
+/// scenario![
+///     test_context,
+///     SkipCommitOpSecondaryMiner,
+///     BootToEpoch3,
+///     // more commands...
+/// ]
+/// ```
+#[macro_export]
+macro_rules! scenario {
+    ($test_context:expr, $($cmd_type:ident),+ $(,)?) => {
+        {
+            let test_context = $test_context.clone();
+            let config = proptest::test_runner::Config {
+                cases: 1,
+                max_shrink_iters: 0,
+                ..Default::default()
+            };
+
+            // Use MADHOUSE env var to determine test mode.
+            let use_madhouse = env::var("MADHOUSE") == Ok("1".into());
+
+            if use_madhouse {
+                proptest::proptest!(config, |(commands in proptest::collection::vec(
+                    proptest::prop_oneof![
+                        $($cmd_type::build(test_context.clone())),+
+                    ],
+                    1..16,
+                ))| {
+                    println!("\n=== New Test Run (MADHOUSE mode) ===\n");
+                    let mut state = State::new();
+                    let mut executed = Vec::with_capacity(commands.len());
+                    for cmd in &commands {
+                        if cmd.command.check(&state) {
+                            cmd.command.apply(&mut state);
+                            executed.push(cmd);
+                        }
+                    }
+                    println!("Selected:");
+                    for (i, cmd) in commands.iter().enumerate() {
+                        println!("{:02}. {}", i + 1, cmd.command.label());
+                    }
+                    println!("Executed:");
+                    for (i, cmd) in executed.iter().enumerate() {
+                        println!("{:02}. {}", i + 1, cmd.command.label());
+                    }
+                });
+            } else {
+                proptest::proptest!(config, |(commands in prop_allof![
+                    $($cmd_type::build(test_context.clone())),+
+                ])| {
+                    println!("\n=== New Test Run (deterministic mode) ===\n");
+                    let mut state = State::new();
+                    let mut executed = Vec::with_capacity(commands.len());
+                    for cmd in &commands {
+                        if cmd.command.check(&state) {
+                            cmd.command.apply(&mut state);
+                            executed.push(cmd);
+                        }
+                    }
+                    println!("Selected:");
+                    for (i, cmd) in commands.iter().enumerate() {
+                        println!("{:02}. {}", i + 1, cmd.command.label());
+                    }
+                    println!("Executed:");
+                    for (i, cmd) in executed.iter().enumerate() {
+                        println!("{:02}. {}", i + 1, cmd.command.label());
+                    }
+                });
+            }
+        }
+    };
+}
+
+#[test]
+fn allow_reorg_within_first_proposal_burn_block_timing_secs_scenario() {
+    let num_signers = 5;
+    let num_transfer_txs = 3;
+
+    let test_context = Arc::new(TestContext::new(num_signers, num_transfer_txs));
+
+    scenario! [
+        test_context,
+        SkipCommitOpSecondaryMiner,
+        BootToEpoch3,
+        SkipCommitOpPrimaryMiner,
+        MineBitcoinBlockTenureChangePrimaryMinerCommand,
+        SubmitBlockCommitSecondaryMinerCommand,
+        StallMiningCommand,
+        MineTenureCommand,
+        SubmitBlockCommitPrimaryMinerCommand,
+        RecoverFromStallCommand,
+        WaitForBlockFromMiner2Command,
+        WaitForBlockFromMiner1Command,
+        SendTransferTxCommand,
+        ShutdownMinersCommand
+    ]
+}
