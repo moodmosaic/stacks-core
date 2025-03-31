@@ -13215,8 +13215,12 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs_scenario() {
         SubmitBlockCommitPrimaryMinerCommand,
         RecoverFromStallCommand,
         WaitForBlockFromMiner2Command,
+        MineTenureCommand,
         WaitForBlockFromMiner1Command,
+        SubmitBlockCommitPrimaryMinerCommand,
         SendTransferTxCommand,
+        WaitForBlockFromMiner1Command,
+        MineBitcoinBlockTenureChangePrimaryMinerCommand,
         ShutdownMinersCommand
     ]
 }
