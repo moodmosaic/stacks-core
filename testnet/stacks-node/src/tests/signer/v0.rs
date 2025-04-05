@@ -12111,13 +12111,34 @@ fn mark_miner_as_invalid_if_reorg_is_rejected() {
 }
 
 use proptest::prelude::{Just, Strategy};
-use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::fmt::Debug;
 
-pub struct TestContext {
+use crate::{prop_allof, scenario};
+use crate::tests::madhouse::{
+    Command, CommandWrapper, State, TestContext, execute_commands
+};
+
+pub struct SignerTestContext {
     miners: Arc<Mutex<MultipleMinerTest>>,
 }
 
-impl TestContext {
+impl Debug for SignerTestContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignerTestContext").finish()
+    }
+}
+
+impl Clone for SignerTestContext {
+    fn clone(&self) -> Self {
+        Self {
+            miners: self.miners.clone(),
+        }
+    }
+}
+
+impl TestContext for SignerTestContext {}
+
+impl SignerTestContext {
     fn new(num_signers: usize, num_transfer_txs: u64) -> Self {
         let miners = MultipleMinerTest::new_with_config_modifications(
             num_signers,
@@ -12141,54 +12162,15 @@ impl TestContext {
     }
 }
 
-pub struct State {
+#[derive(Debug, Default)]
+pub struct SignerTestState {
     is_booted_to_nakamoto: bool,
     is_primary_miner_skip_commit_op: bool,
     is_secondary_miner_skip_commit_op: bool,
     mining_stalled: bool,
 }
 
-impl State {
-    fn new() -> Self {
-        Self {
-            is_booted_to_nakamoto: false,
-            is_primary_miner_skip_commit_op: false,
-            is_secondary_miner_skip_commit_op: false,
-            mining_stalled: false,
-        }
-    }
-}
-
-/// A trait that all commands must implement.
-pub trait Command {
-    fn check(&self, state: &State) -> bool;
-    fn apply(&self, state: &mut State);
-    fn label(&self) -> String;
-    fn build(ctx: Arc<TestContext>) -> impl Strategy<Value = CommandWrapper>
-    where
-        Self: Sized;
-}
-
-/// Wrapper to make `dyn Command` clonable and debuggable.
-#[derive(Clone)]
-struct CommandWrapper {
-    command: Arc<dyn Command>,
-}
-
-impl CommandWrapper {
-    fn new<C: Command + 'static>(cmd: C) -> Self {
-        Self {
-            command: Arc::new(cmd),
-        }
-    }
-}
-
-// Manually implement Debug for `CommandWrapper`.
-impl Debug for CommandWrapper {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "{}", self.command.label()) // Print command label.
-    }
-}
+impl State for SignerTestState {}
 
 struct BootToEpoch3 {
     miners: Arc<Mutex<MultipleMinerTest>>,
@@ -12200,8 +12182,8 @@ impl BootToEpoch3 {
     }
 }
 
-impl Command for BootToEpoch3 {
-    fn check(&self, state: &State) -> bool {
+impl Command<SignerTestState, SignerTestContext> for BootToEpoch3 {
+    fn check(&self, state: &SignerTestState) -> bool {
         println!(
             "Checking: Booting miners to Nakamoto. Result: {:?}",
             !state.is_booted_to_nakamoto
@@ -12209,7 +12191,7 @@ impl Command for BootToEpoch3 {
         !state.is_booted_to_nakamoto
     }
 
-    fn apply(&self, state: &mut State) {
+    fn apply(&self, state: &mut SignerTestState) {
         println!("Applying: Booting miners to Nakamoto");
 
         self.miners.lock().unwrap().boot_to_epoch_3();
@@ -12226,7 +12208,7 @@ impl Command for BootToEpoch3 {
         "BOOT_TO_EPOCH_3".to_string()
     }
 
-    fn build(ctx: Arc<TestContext>) -> impl Strategy<Value = CommandWrapper> {
+    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(BootToEpoch3::new(ctx.miners.clone())))
     }
 }
@@ -12243,8 +12225,8 @@ impl SkipCommitOpPrimaryMiner {
     }
 }
 
-impl Command for SkipCommitOpPrimaryMiner {
-    fn check(&self, state: &State) -> bool {
+impl Command<SignerTestState, SignerTestContext> for SkipCommitOpPrimaryMiner {
+    fn check(&self, state: &SignerTestState) -> bool {
         println!(
             "Checking: Skipping commit operations for miner 1. Result: {:?}",
             !state.is_primary_miner_skip_commit_op
@@ -12253,7 +12235,7 @@ impl Command for SkipCommitOpPrimaryMiner {
         !state.is_primary_miner_skip_commit_op
     }
 
-    fn apply(&self, state: &mut State) {
+    fn apply(&self, state: &mut SignerTestState) {
         println!("Applying: Skipping commit operations for miner 1");
 
         self.miner_1_skip_commit_flag.set(true);
@@ -12265,7 +12247,7 @@ impl Command for SkipCommitOpPrimaryMiner {
         "SKIP_COMMIT_OP_PRIMARY_MINER".to_string()
     }
 
-    fn build(ctx: Arc<TestContext>) -> impl Strategy<Value = CommandWrapper> {
+    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(SkipCommitOpPrimaryMiner::new(
             ctx.miners
                 .lock()
@@ -12291,8 +12273,8 @@ impl SkipCommitOpSecondaryMiner {
     }
 }
 
-impl Command for SkipCommitOpSecondaryMiner {
-    fn check(&self, state: &State) -> bool {
+impl Command<SignerTestState, SignerTestContext> for SkipCommitOpSecondaryMiner {
+    fn check(&self, state: &SignerTestState) -> bool {
         println!(
             "Checking: Skipping commit operations for miner 2. Result: {:?}",
             !state.is_secondary_miner_skip_commit_op
@@ -12301,7 +12283,7 @@ impl Command for SkipCommitOpSecondaryMiner {
         !state.is_secondary_miner_skip_commit_op
     }
 
-    fn apply(&self, state: &mut State) {
+    fn apply(&self, state: &mut SignerTestState) {
         println!("Applying: Skipping commit operations for miner 2");
 
         self.miner_2_skip_commit_flag.set(true);
@@ -12313,7 +12295,7 @@ impl Command for SkipCommitOpSecondaryMiner {
         "SKIP_COMMIT_OP_SECONDARY_MINER".to_string()
     }
 
-    fn build(ctx: Arc<TestContext>) -> impl Strategy<Value = CommandWrapper> {
+    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(SkipCommitOpSecondaryMiner::new(
             ctx.miners
                 .lock()
@@ -12335,8 +12317,8 @@ impl MineBitcoinBlockTenureChangePrimaryMinerCommand {
     }
 }
 
-impl Command for MineBitcoinBlockTenureChangePrimaryMinerCommand {
-    fn check(&self, state: &State) -> bool {
+impl Command<SignerTestState, SignerTestContext> for MineBitcoinBlockTenureChangePrimaryMinerCommand {
+    fn check(&self, state: &SignerTestState) -> bool {
         println!(
             "Checking: Miner 1 mining Bitcoin block and tenure change tx. Result: {:?}",
             state.is_booted_to_nakamoto
@@ -12345,7 +12327,7 @@ impl Command for MineBitcoinBlockTenureChangePrimaryMinerCommand {
         state.is_booted_to_nakamoto
     }
 
-    fn apply(&self, _state: &mut State) {
+    fn apply(&self, _state: &mut SignerTestState) {
         println!("Applying: Miner 1 mining Bitcoin block and tenure change tx");
 
         let (stacks_height_before, conf_1, miner_pk_1) = {
@@ -12391,7 +12373,7 @@ impl Command for MineBitcoinBlockTenureChangePrimaryMinerCommand {
         "MINE_BITCOIN_BLOCK_AND_TENURE_CHANGE_MINER_1".to_string()
     }
 
-    fn build(ctx: Arc<TestContext>) -> impl Strategy<Value = CommandWrapper> {
+    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(
             MineBitcoinBlockTenureChangePrimaryMinerCommand::new(ctx.miners.clone()),
         ))
@@ -12408,8 +12390,8 @@ impl MineBitcoinBlockTenureChangeSecondaryMinerCommand {
     }
 }
 
-impl Command for MineBitcoinBlockTenureChangeSecondaryMinerCommand {
-    fn check(&self, state: &State) -> bool {
+impl Command<SignerTestState, SignerTestContext> for MineBitcoinBlockTenureChangeSecondaryMinerCommand {
+    fn check(&self, state: &SignerTestState) -> bool {
         println!(
             "Checking: Miner 2 mining Bitcoin block and tenure change tx. Result: {:?}",
             state.is_booted_to_nakamoto
@@ -12418,7 +12400,7 @@ impl Command for MineBitcoinBlockTenureChangeSecondaryMinerCommand {
         state.is_booted_to_nakamoto
     }
 
-    fn apply(&self, _state: &mut State) {
+    fn apply(&self, _state: &mut SignerTestState) {
         println!("Applying: Miner 2 mining Bitcoin block and tenure change tx");
 
         let stacks_height_before = self.miners.lock().unwrap().get_peer_stacks_tip_height();
@@ -12460,7 +12442,7 @@ impl Command for MineBitcoinBlockTenureChangeSecondaryMinerCommand {
         "MINE_BITCOIN_BLOCK_AND_TENURE_CHANGE_MINER_2".to_string()
     }
 
-    fn build(ctx: Arc<TestContext>) -> impl Strategy<Value = CommandWrapper> {
+    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(
             MineBitcoinBlockTenureChangeSecondaryMinerCommand::new(ctx.miners.clone()),
         ))
@@ -12477,8 +12459,8 @@ impl WaitForBlockFromMiner1Command {
     }
 }
 
-impl Command for WaitForBlockFromMiner1Command {
-    fn check(&self, state: &State) -> bool {
+impl Command<SignerTestState, SignerTestContext> for WaitForBlockFromMiner1Command {
+    fn check(&self, state: &SignerTestState) -> bool {
         println!(
             "Checking: Waiting for Nakamoto block from miner 1. Result: {:?}",
             !state.mining_stalled
@@ -12487,7 +12469,7 @@ impl Command for WaitForBlockFromMiner1Command {
         !state.mining_stalled
     }
 
-    fn apply(&self, _state: &mut State) {
+    fn apply(&self, _state: &mut SignerTestState) {
         println!("Applying: Waiting for Nakamoto block from miner 1");
 
         let miners_arc = self.miners.clone();
@@ -12522,7 +12504,7 @@ impl Command for WaitForBlockFromMiner1Command {
         "WAIT_FOR_BLOCK_FROM_MINER_1".to_string()
     }
 
-    fn build(ctx: Arc<TestContext>) -> impl Strategy<Value = CommandWrapper> {
+    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(WaitForBlockFromMiner1Command::new(
             ctx.miners.clone(),
         )))
@@ -12539,8 +12521,8 @@ impl WaitForBlockFromMiner2Command {
     }
 }
 
-impl Command for WaitForBlockFromMiner2Command {
-    fn check(&self, state: &State) -> bool {
+impl Command<SignerTestState, SignerTestContext> for WaitForBlockFromMiner2Command {
+    fn check(&self, state: &SignerTestState) -> bool {
         println!(
             "Checking: Waiting for Nakamoto block from miner 2. Result: {:?}",
             !state.mining_stalled
@@ -12549,7 +12531,7 @@ impl Command for WaitForBlockFromMiner2Command {
         !state.mining_stalled
     }
 
-    fn apply(&self, _state: &mut State) {
+    fn apply(&self, _state: &mut SignerTestState) {
         println!("Applying: Waiting for Nakamoto block from miner 2");
 
         let miners_arc = self.miners.clone();
@@ -12584,7 +12566,7 @@ impl Command for WaitForBlockFromMiner2Command {
         "WAIT_FOR_BLOCK_FROM_MINER_2".to_string()
     }
 
-    fn build(ctx: Arc<TestContext>) -> impl Strategy<Value = CommandWrapper> {
+    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(WaitForBlockFromMiner2Command::new(
             ctx.miners.clone(),
         )))
@@ -12601,8 +12583,8 @@ impl SubmitBlockCommitSecondaryMinerCommand {
     }
 }
 
-impl Command for SubmitBlockCommitSecondaryMinerCommand {
-    fn check(&self, state: &State) -> bool {
+impl Command<SignerTestState, SignerTestContext> for SubmitBlockCommitSecondaryMinerCommand {
+    fn check(&self, state: &SignerTestState) -> bool {
         println!(
             "Checking: Submitting block commit miner 2. Result: {:?}",
             state.is_secondary_miner_skip_commit_op
@@ -12613,7 +12595,7 @@ impl Command for SubmitBlockCommitSecondaryMinerCommand {
         state.is_secondary_miner_skip_commit_op
     }
 
-    fn apply(&self, _state: &mut State) {
+    fn apply(&self, _state: &mut SignerTestState) {
         println!("Applying: Submitting block commit miner 2");
 
         let (conf_1, _) = self.miners.lock().unwrap().get_node_configs();
@@ -12627,7 +12609,7 @@ impl Command for SubmitBlockCommitSecondaryMinerCommand {
         "SUBMIT_BLOCK_COMMIT_SECONDARY_MINER".to_string()
     }
 
-    fn build(ctx: Arc<TestContext>) -> impl Strategy<Value = CommandWrapper> {
+    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(
             SubmitBlockCommitSecondaryMinerCommand::new(ctx.miners.clone()),
         ))
@@ -12644,8 +12626,8 @@ impl SubmitBlockCommitPrimaryMinerCommand {
     }
 }
 
-impl Command for SubmitBlockCommitPrimaryMinerCommand {
-    fn check(&self, state: &State) -> bool {
+impl Command<SignerTestState, SignerTestContext> for SubmitBlockCommitPrimaryMinerCommand {
+    fn check(&self, state: &SignerTestState) -> bool {
         println!(
             "Checking: Submitting block commit miner 1. Result: {:?}",
             state.is_primary_miner_skip_commit_op
@@ -12656,7 +12638,7 @@ impl Command for SubmitBlockCommitPrimaryMinerCommand {
         state.is_primary_miner_skip_commit_op
     }
 
-    fn apply(&self, _state: &mut State) {
+    fn apply(&self, _state: &mut SignerTestState) {
         println!("Applying: Submitting block commit miner 1");
 
         let (conf_1, _) = self.miners.lock().unwrap().get_node_configs();
@@ -12670,7 +12652,7 @@ impl Command for SubmitBlockCommitPrimaryMinerCommand {
         "SUBMIT_BLOCK_COMMIT_PRIMARY_MINER".to_string()
     }
 
-    fn build(ctx: Arc<TestContext>) -> impl Strategy<Value = CommandWrapper> {
+    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(
             SubmitBlockCommitPrimaryMinerCommand::new(ctx.miners.clone()),
         ))
@@ -12679,8 +12661,8 @@ impl Command for SubmitBlockCommitPrimaryMinerCommand {
 
 struct StallMiningCommand;
 
-impl Command for StallMiningCommand {
-    fn check(&self, state: &State) -> bool {
+impl Command<SignerTestState, SignerTestContext> for StallMiningCommand {
+    fn check(&self, state: &SignerTestState) -> bool {
         println!(
             "Checking: Stalling mining. Result: {:?}",
             !state.mining_stalled
@@ -12689,7 +12671,7 @@ impl Command for StallMiningCommand {
         !state.mining_stalled
     }
 
-    fn apply(&self, state: &mut State) {
+    fn apply(&self, state: &mut SignerTestState) {
         println!("Applying: Stalling mining");
         TEST_MINE_STALL.set(true);
 
@@ -12700,15 +12682,15 @@ impl Command for StallMiningCommand {
         "STALL_MINING".to_string()
     }
 
-    fn build(_ctx: Arc<TestContext>) -> impl Strategy<Value = CommandWrapper> {
+    fn build(_ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(StallMiningCommand))
     }
 }
 
 struct RecoverFromStallCommand;
 
-impl Command for RecoverFromStallCommand {
-    fn check(&self, state: &State) -> bool {
+impl Command<SignerTestState, SignerTestContext> for RecoverFromStallCommand {
+    fn check(&self, state: &SignerTestState) -> bool {
         println!(
             "Checking: Recovering from mining stall. Result: {:?}",
             state.mining_stalled
@@ -12717,7 +12699,7 @@ impl Command for RecoverFromStallCommand {
         state.mining_stalled
     }
 
-    fn apply(&self, state: &mut State) {
+    fn apply(&self, state: &mut SignerTestState) {
         println!("Applying: Recovering from mining stall");
         TEST_MINE_STALL.set(false);
 
@@ -12728,7 +12710,7 @@ impl Command for RecoverFromStallCommand {
         "RECOVER_FROM_STALL".to_string()
     }
 
-    fn build(_ctx: Arc<TestContext>) -> impl Strategy<Value = CommandWrapper> {
+    fn build(_ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(RecoverFromStallCommand))
     }
 }
@@ -12747,15 +12729,15 @@ impl MineTenureCommand {
     }
 }
 
-impl Command for MineTenureCommand {
-    fn check(&self, _state: &State) -> bool {
+impl Command<SignerTestState, SignerTestContext> for MineTenureCommand {
+    fn check(&self, _state: &SignerTestState) -> bool {
         println!("Checking: Mining tenure. Result: {:?}", true);
         // TODO: Always appliable for now. Rewrite to mimic the original test
         // if needed.
         true
     }
 
-    fn apply(&self, _state: &mut State) {
+    fn apply(&self, _state: &mut SignerTestState) {
         println!(
             "Applying: Mining tenure and waiting for it for {:?} seconds",
             self.timeout_secs
@@ -12781,7 +12763,7 @@ impl Command for MineTenureCommand {
         "MINE_TENURE".to_string()
     }
 
-    fn build(ctx: Arc<TestContext>) -> impl Strategy<Value = CommandWrapper> {
+    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         (60u64..90u64).prop_map(move |timeout_secs| {
             CommandWrapper::new(MineTenureCommand::new(ctx.miners.clone(), timeout_secs))
         })
@@ -12798,13 +12780,13 @@ impl SendTransferTxCommand {
     }
 }
 
-impl Command for SendTransferTxCommand {
-    fn check(&self, _state: &State) -> bool {
+impl Command<SignerTestState, SignerTestContext> for SendTransferTxCommand {
+    fn check(&self, _state: &SignerTestState) -> bool {
         println!("Checking: Sending transfer tx. Result: {:?}", true);
         true
     }
 
-    fn apply(&self, _state: &mut State) {
+    fn apply(&self, _state: &mut SignerTestState) {
         println!("Applying: Sending transfer tx");
 
         self.miners.lock().unwrap().send_transfer_tx();
@@ -12814,7 +12796,7 @@ impl Command for SendTransferTxCommand {
         "SEND_TRANSFER_TX".to_string()
     }
 
-    fn build(ctx: Arc<TestContext>) -> impl Strategy<Value = CommandWrapper> {
+    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(SendTransferTxCommand::new(
             ctx.miners.clone(),
         )))
@@ -12831,13 +12813,13 @@ impl ShutdownMinersCommand {
     }
 }
 
-impl Command for ShutdownMinersCommand {
-    fn check(&self, _state: &State) -> bool {
+impl Command<SignerTestState, SignerTestContext> for ShutdownMinersCommand {
+    fn check(&self, _state: &SignerTestState) -> bool {
         println!("Checking: Shutting down miners. Result: {:?}", true);
         true
     }
 
-    fn apply(&self, _state: &mut State) {
+    fn apply(&self, _state: &mut SignerTestState) {
         println!("Applying: Shutting down miners");
 
         if let Ok(miners_arc) = Arc::try_unwrap(self.miners.clone()) {
@@ -12851,7 +12833,7 @@ impl Command for ShutdownMinersCommand {
         "SHUTDOWN_MINERS".to_string()
     }
 
-    fn build(ctx: Arc<TestContext>) -> impl Strategy<Value = CommandWrapper> {
+    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(ShutdownMinersCommand::new(
             ctx.miners.clone(),
         )))
@@ -12863,9 +12845,9 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs_commands() {
     let num_signers = 5;
     let num_transfer_txs = 3;
 
-    let test_context = TestContext::new(num_signers, num_transfer_txs);
+    let test_context = SignerTestContext::new(num_signers, num_transfer_txs);
 
-    let mut state = State::new();
+    let mut state = SignerTestState::default();
 
     info!("------------------------- Pause Miner 2's Block Commits -------------------------");
     let skip_commit_op_secondary_miner = SkipCommitOpSecondaryMiner::new(
@@ -12982,226 +12964,7 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs_madhouse() {
     let num_signers = 5;
     let num_transfer_txs = 3;
 
-    let test_context = Arc::new(TestContext::new(num_signers, num_transfer_txs));
-
-    let config = proptest::test_runner::Config {
-        cases: 1,
-        max_shrink_iters: 0,
-        ..Default::default()
-    };
-
-    proptest::proptest!(config, |(commands in proptest::collection::vec(
-        proptest::prop_oneof![
-            SkipCommitOpSecondaryMiner::build(test_context.clone()),
-            BootToEpoch3::build(test_context.clone()),
-            SkipCommitOpPrimaryMiner::build(test_context.clone()),
-            MineBitcoinBlockTenureChangePrimaryMinerCommand::build(test_context.clone()),
-            SubmitBlockCommitSecondaryMinerCommand::build(test_context.clone()),
-            StallMiningCommand::build(test_context.clone()),
-            MineTenureCommand::build(test_context.clone()),
-            SubmitBlockCommitPrimaryMinerCommand::build(test_context.clone()),
-            RecoverFromStallCommand::build(test_context.clone()),
-            WaitForBlockFromMiner2Command::build(test_context.clone()),
-            WaitForBlockFromMiner1Command::build(test_context.clone()),
-            SendTransferTxCommand::build(test_context.clone()),
-            ShutdownMinersCommand::build(test_context.clone())
-        ],
-        1..16,
-    ))| {
-        println!("\n=== New Test Run ===\n");
-        let mut state = State::new();
-        let mut executed = Vec::with_capacity(commands.len());
-
-        for cmd in &commands {
-            if cmd.command.check(&state) {
-                cmd.command.apply(&mut state);
-                executed.push(cmd);
-            }
-        }
-
-        println!("Selected:");
-        for (i, cmd) in commands.iter().enumerate() {
-            println!("{:02}. {}", i + 1, cmd.command.label());
-        }
-
-        println!("Executed:");
-        for (i, cmd) in executed.iter().enumerate() {
-            println!("{:02}. {}", i + 1, cmd.command.label());
-        }
-    });
-}
-
-/// Creates a strategy that always returns a Vec containing values from all the
-/// provided strategies, in the exact order they were passed.
-///
-/// This is similar to `prop_oneof` but instead of randomly picking strategies,
-/// it includes values from all strategies in a Vec.
-///
-/// # Example
-///
-/// ```rust
-/// use proptest::prelude::*;
-///
-/// // Creates a strategy that returns vec![1, 2, 3].
-/// let all = prop_allof![Just(1), Just(2), Just(3)];
-/// ```
-macro_rules! prop_allof {
-    ($strat:expr $(,)?) => {
-        $strat.prop_map(|val| vec![val])
-    };
-
-    ($first:expr, $($rest:expr),+ $(,)?) => {
-        {
-            let first_strat = $first.prop_map(|val| vec![val]);
-            let rest_strat = prop_allof!($($rest),+);
-
-            (first_strat, rest_strat).prop_map(|(mut first_vec, rest_vec)| {
-                first_vec.extend(rest_vec);
-                first_vec
-            })
-        }
-    };
-}
-
-#[test]
-fn allow_reorg_within_first_proposal_burn_block_timing_secs_slowhouse() {
-    let num_signers = 5;
-    let num_transfer_txs = 3;
-
-    let test_context = Arc::new(TestContext::new(num_signers, num_transfer_txs));
-
-    let config = proptest::test_runner::Config {
-        cases: 1,
-        max_shrink_iters: 0,
-        ..Default::default()
-    };
-
-    proptest::proptest!(config, |(commands in prop_allof![
-        SkipCommitOpSecondaryMiner::build(test_context.clone()),
-        BootToEpoch3::build(test_context.clone()),
-        SkipCommitOpPrimaryMiner::build(test_context.clone()),
-        MineBitcoinBlockTenureChangePrimaryMinerCommand::build(test_context.clone()),
-        SubmitBlockCommitSecondaryMinerCommand::build(test_context.clone()),
-        StallMiningCommand::build(test_context.clone()),
-        MineTenureCommand::build(test_context.clone()),
-        SubmitBlockCommitPrimaryMinerCommand::build(test_context.clone()),
-        RecoverFromStallCommand::build(test_context.clone()),
-        WaitForBlockFromMiner2Command::build(test_context.clone()),
-        WaitForBlockFromMiner1Command::build(test_context.clone()),
-        SendTransferTxCommand::build(test_context.clone()),
-        ShutdownMinersCommand::build(test_context.clone())
-    ])| {
-        println!("\n=== New Test Run ===\n");
-        let mut state = State::new();
-        let mut executed = Vec::with_capacity(commands.len());
-
-        for cmd in &commands {
-            if cmd.command.check(&state) {
-                cmd.command.apply(&mut state);
-                executed.push(cmd);
-            }
-        }
-
-        println!("Selected:");
-        for (i, cmd) in commands.iter().enumerate() {
-            println!("{:02}. {}", i + 1, cmd.command.label());
-        }
-
-        println!("Executed:");
-        for (i, cmd) in executed.iter().enumerate() {
-            println!("{:02}. {}", i + 1, cmd.command.label());
-        }
-    });
-}
-
-/// Runs a test scenario with the given command types.
-///
-/// When MADHOUSE=1, uses `proptest::prop_oneof!` to randomly pick commands.
-/// Otherwise, uses the custom `prop_allof` to select all commands in order.
-///
-/// # Example
-///
-/// ```rust
-/// let test_context = Arc::new(TestContext::new(5, 3));
-/// scenario![
-///     test_context,
-///     SkipCommitOpSecondaryMiner,
-///     BootToEpoch3,
-///     // more commands...
-/// ]
-/// ```
-#[macro_export]
-macro_rules! scenario {
-    ($test_context:expr, $($cmd_type:ident),+ $(,)?) => {
-        {
-            let test_context = $test_context.clone();
-            let config = proptest::test_runner::Config {
-                cases: 1,
-                max_shrink_iters: 0,
-                ..Default::default()
-            };
-
-            // Use MADHOUSE env var to determine test mode.
-            let use_madhouse = env::var("MADHOUSE") == Ok("1".into());
-
-            if use_madhouse {
-                proptest::proptest!(config, |(commands in proptest::collection::vec(
-                    proptest::prop_oneof![
-                        $($cmd_type::build(test_context.clone())),+
-                    ],
-                    1..16,
-                ))| {
-                    println!("\n=== New Test Run (MADHOUSE mode) ===\n");
-                    let mut state = State::new();
-                    let mut executed = Vec::with_capacity(commands.len());
-                    for cmd in &commands {
-                        if cmd.command.check(&state) {
-                            cmd.command.apply(&mut state);
-                            executed.push(cmd);
-                        }
-                    }
-                    println!("Selected:");
-                    for (i, cmd) in commands.iter().enumerate() {
-                        println!("{:02}. {}", i + 1, cmd.command.label());
-                    }
-                    println!("Executed:");
-                    for (i, cmd) in executed.iter().enumerate() {
-                        println!("{:02}. {}", i + 1, cmd.command.label());
-                    }
-                });
-            } else {
-                proptest::proptest!(config, |(commands in prop_allof![
-                    $($cmd_type::build(test_context.clone())),+
-                ])| {
-                    println!("\n=== New Test Run (deterministic mode) ===\n");
-                    let mut state = State::new();
-                    let mut executed = Vec::with_capacity(commands.len());
-                    for cmd in &commands {
-                        if cmd.command.check(&state) {
-                            cmd.command.apply(&mut state);
-                            executed.push(cmd);
-                        }
-                    }
-                    println!("Selected:");
-                    for (i, cmd) in commands.iter().enumerate() {
-                        println!("{:02}. {}", i + 1, cmd.command.label());
-                    }
-                    println!("Executed:");
-                    for (i, cmd) in executed.iter().enumerate() {
-                        println!("{:02}. {}", i + 1, cmd.command.label());
-                    }
-                });
-            }
-        }
-    };
-}
-
-#[test]
-fn allow_reorg_within_first_proposal_burn_block_timing_secs_scenario() {
-    let num_signers = 5;
-    let num_transfer_txs = 3;
-
-    let test_context = Arc::new(TestContext::new(num_signers, num_transfer_txs));
+    let test_context = Arc::new(SignerTestContext::new(num_signers, num_transfer_txs));
 
     scenario! [
         test_context,
