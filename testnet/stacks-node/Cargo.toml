@@ -52,7 +52,8 @@ http-types = "2.12"
 tempfile = "3.3"
 mockito = "1.5"
 serial_test = "3.2.0"
-proptest = "1.6.0"
+proptest = { git = "https://github.com/moodmosaic/proptest.git", rev = "c9bdf18c232665b2b740c667c81866b598d06dc7" }
+madhouse = { git = "https://github.com/moodmosaic/madhouse.git", rev = "26c86f9227a90ca0bd25d5176ac15887590d5666" }
 
 [[bin]]
 name = "stacks-node"

@@ -12113,9 +12113,8 @@ fn mark_miner_as_invalid_if_reorg_is_rejected() {
 use proptest::prelude::{Just, Strategy};
 use std::fmt::Debug;
 
-use crate::{prop_allof, scenario};
-use crate::tests::madhouse::{
-    Command, CommandWrapper, State, TestContext, execute_commands
+use madhouse::{
+    execute_commands, prop_allof, scenario, Command, CommandWrapper, State, TestContext,
 };
 
 pub struct SignerTestContext {
