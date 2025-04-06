@@ -12207,7 +12207,9 @@ impl Command<SignerTestState, SignerTestContext> for BootToEpoch3 {
         "BOOT_TO_EPOCH_3".to_string()
     }
 
-    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
+    fn build(
+        ctx: Arc<SignerTestContext>,
+    ) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(BootToEpoch3::new(ctx.miners.clone())))
     }
 }
@@ -12246,7 +12248,9 @@ impl Command<SignerTestState, SignerTestContext> for SkipCommitOpPrimaryMiner {
         "SKIP_COMMIT_OP_PRIMARY_MINER".to_string()
     }
 
-    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
+    fn build(
+        ctx: Arc<SignerTestContext>,
+    ) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(SkipCommitOpPrimaryMiner::new(
             ctx.miners
                 .lock()
@@ -12294,7 +12298,9 @@ impl Command<SignerTestState, SignerTestContext> for SkipCommitOpSecondaryMiner 
         "SKIP_COMMIT_OP_SECONDARY_MINER".to_string()
     }
 
-    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
+    fn build(
+        ctx: Arc<SignerTestContext>,
+    ) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(SkipCommitOpSecondaryMiner::new(
             ctx.miners
                 .lock()
@@ -12316,7 +12322,9 @@ impl MineBitcoinBlockTenureChangePrimaryMinerCommand {
     }
 }
 
-impl Command<SignerTestState, SignerTestContext> for MineBitcoinBlockTenureChangePrimaryMinerCommand {
+impl Command<SignerTestState, SignerTestContext>
+    for MineBitcoinBlockTenureChangePrimaryMinerCommand
+{
     fn check(&self, state: &SignerTestState) -> bool {
         println!(
             "Checking: Miner 1 mining Bitcoin block and tenure change tx. Result: {:?}",
@@ -12372,7 +12380,9 @@ impl Command<SignerTestState, SignerTestContext> for MineBitcoinBlockTenureChang
         "MINE_BITCOIN_BLOCK_AND_TENURE_CHANGE_MINER_1".to_string()
     }
 
-    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
+    fn build(
+        ctx: Arc<SignerTestContext>,
+    ) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(
             MineBitcoinBlockTenureChangePrimaryMinerCommand::new(ctx.miners.clone()),
         ))
@@ -12389,7 +12399,9 @@ impl MineBitcoinBlockTenureChangeSecondaryMinerCommand {
     }
 }
 
-impl Command<SignerTestState, SignerTestContext> for MineBitcoinBlockTenureChangeSecondaryMinerCommand {
+impl Command<SignerTestState, SignerTestContext>
+    for MineBitcoinBlockTenureChangeSecondaryMinerCommand
+{
     fn check(&self, state: &SignerTestState) -> bool {
         println!(
             "Checking: Miner 2 mining Bitcoin block and tenure change tx. Result: {:?}",
@@ -12441,7 +12453,9 @@ impl Command<SignerTestState, SignerTestContext> for MineBitcoinBlockTenureChang
         "MINE_BITCOIN_BLOCK_AND_TENURE_CHANGE_MINER_2".to_string()
     }
 
-    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
+    fn build(
+        ctx: Arc<SignerTestContext>,
+    ) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(
             MineBitcoinBlockTenureChangeSecondaryMinerCommand::new(ctx.miners.clone()),
         ))
@@ -12503,7 +12517,9 @@ impl Command<SignerTestState, SignerTestContext> for WaitForBlockFromMiner1Comma
         "WAIT_FOR_BLOCK_FROM_MINER_1".to_string()
     }
 
-    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
+    fn build(
+        ctx: Arc<SignerTestContext>,
+    ) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(WaitForBlockFromMiner1Command::new(
             ctx.miners.clone(),
         )))
@@ -12565,7 +12581,9 @@ impl Command<SignerTestState, SignerTestContext> for WaitForBlockFromMiner2Comma
         "WAIT_FOR_BLOCK_FROM_MINER_2".to_string()
     }
 
-    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
+    fn build(
+        ctx: Arc<SignerTestContext>,
+    ) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(WaitForBlockFromMiner2Command::new(
             ctx.miners.clone(),
         )))
@@ -12608,7 +12626,9 @@ impl Command<SignerTestState, SignerTestContext> for SubmitBlockCommitSecondaryM
         "SUBMIT_BLOCK_COMMIT_SECONDARY_MINER".to_string()
     }
 
-    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
+    fn build(
+        ctx: Arc<SignerTestContext>,
+    ) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(
             SubmitBlockCommitSecondaryMinerCommand::new(ctx.miners.clone()),
         ))
@@ -12651,7 +12671,9 @@ impl Command<SignerTestState, SignerTestContext> for SubmitBlockCommitPrimaryMin
         "SUBMIT_BLOCK_COMMIT_PRIMARY_MINER".to_string()
     }
 
-    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
+    fn build(
+        ctx: Arc<SignerTestContext>,
+    ) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(
             SubmitBlockCommitPrimaryMinerCommand::new(ctx.miners.clone()),
         ))
@@ -12681,7 +12703,9 @@ impl Command<SignerTestState, SignerTestContext> for StallMiningCommand {
         "STALL_MINING".to_string()
     }
 
-    fn build(_ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
+    fn build(
+        _ctx: Arc<SignerTestContext>,
+    ) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(StallMiningCommand))
     }
 }
@@ -12709,7 +12733,9 @@ impl Command<SignerTestState, SignerTestContext> for RecoverFromStallCommand {
         "RECOVER_FROM_STALL".to_string()
     }
 
-    fn build(_ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
+    fn build(
+        _ctx: Arc<SignerTestContext>,
+    ) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(RecoverFromStallCommand))
     }
 }
@@ -12762,7 +12788,9 @@ impl Command<SignerTestState, SignerTestContext> for MineTenureCommand {
         "MINE_TENURE".to_string()
     }
 
-    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
+    fn build(
+        ctx: Arc<SignerTestContext>,
+    ) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         (60u64..90u64).prop_map(move |timeout_secs| {
             CommandWrapper::new(MineTenureCommand::new(ctx.miners.clone(), timeout_secs))
         })
@@ -12795,7 +12823,9 @@ impl Command<SignerTestState, SignerTestContext> for SendTransferTxCommand {
         "SEND_TRANSFER_TX".to_string()
     }
 
-    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
+    fn build(
+        ctx: Arc<SignerTestContext>,
+    ) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(SendTransferTxCommand::new(
             ctx.miners.clone(),
         )))
@@ -12832,7 +12862,9 @@ impl Command<SignerTestState, SignerTestContext> for ShutdownMinersCommand {
         "SHUTDOWN_MINERS".to_string()
     }
 
-    fn build(ctx: Arc<SignerTestContext>) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
+    fn build(
+        ctx: Arc<SignerTestContext>,
+    ) -> impl Strategy<Value = CommandWrapper<SignerTestState, SignerTestContext>> {
         Just(CommandWrapper::new(ShutdownMinersCommand::new(
             ctx.miners.clone(),
         )))
@@ -12965,7 +12997,7 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs_madhouse() {
 
     let test_context = Arc::new(SignerTestContext::new(num_signers, num_transfer_txs));
 
-    scenario! [
+    scenario![
         test_context,
         SkipCommitOpSecondaryMiner,
         BootToEpoch3,
