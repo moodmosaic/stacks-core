@@ -10346,7 +10346,6 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs() {
     rl2_skip_commit_op.set(true);
 
     miners.boot_to_epoch_3();
-    // Burn block height here: 231.
 
     let burnchain = conf_1.get_burnchain();
     let sortdb = burnchain.open_sortition_db(true).unwrap();
@@ -10375,57 +10374,34 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs() {
     verify_sortition_winner(&sortdb, &miner_pkh_1);
 
     info!("------------------------- Miner 2 Submits a Block Commit -------------------------");
-    // Miner 2 submits a block commit to mine the Stacks block N+1 targeting
-    // Bitcoin block 232. However, Stacks mining will be stalled and Miner 1
-    // will not mine the Stacks block immediately. By the moment Miner 2
-    // resumes Stacks mining, Miner 1 will have also submitted a block commit
-    // for the Stacks block N+1, targeting the next Bitcoin block 233. Both
-    // commits will propose the same Stacks height, but one will be anchored in
-    // Bitcoin block 232 and the other in Bitcoin block 233. This will result
-    // in N+1 and N+1' blocks being mined. N+2 represents the successful reorg.
-    // The valid block will be miner 2's N+1?
     miners.submit_commit_miner_2(&sortdb);
 
     info!("------------------------- Pause Miner 2's Block Mining -------------------------");
-    // This will disable mining Stacks blocks.
     TEST_MINE_STALL.set(true);
 
     info!("------------------------- Mine Tenure -------------------------");
-    // A Bitcoin block is mined, but mining is disabled. Miner 2 will win the
-    // sortition because is the only one that submitted a block commit.
-    // 232.
     miners
         .mine_bitcoin_blocks_and_confirm(&sortdb, 1, 60)
         .expect("Failed to mine BTC block");
 
     info!("------------------------- Miner 1 Submits a Block Commit -------------------------");
-    // 232 -> no Stacks blocks.
-    // This will be the second block commit for the Stacks block N+1. Miner 1
-    // will submit a block commit for the Stacks block N+1, targeting the next
-    // Bitcoin block 233.
-    miners.submit_commit_miner_1(&sortdb); // Targeting 233.
+    miners.submit_commit_miner_1(&sortdb);
 
     info!("------------------------- Miner 2 Mines Block N+1 -------------------------");
-    // Re-enable Stacks block mining. One Bitcoin block was missed (232). This
-    // means that for 232 we have no Stacks block. The next Stacks block will
-    // target the parent tenure 231.
+
     TEST_MINE_STALL.set(false);
     let miner_2_block_n_1 = wait_for_block_pushed_by_miner_key(30, block_n_height + 1, &miner_pk_2)
         .expect("Failed to get block N+1");
 
     // assure we have a successful sortition that miner 2 won
-    // Maybe unnecessary.
     verify_sortition_winner(&sortdb, &miner_pkh_2);
 
-    // Maybe unnecessary.
     assert_eq!(
         get_chain_info(&conf_1).stacks_tip_height,
         block_n_height + 1
     );
 
     info!("------------------------- Miner 1 Wins the Next Tenure, Mines N+1' -------------------------");
-    // Will include Miner 1's block commit -> winning sortition.
-    // 233.
     miners
         .mine_bitcoin_blocks_and_confirm(&sortdb, 1, 30)
         .expect("Failed to mine BTC block");
@@ -12172,7 +12148,6 @@ fn allow_reorg_within_first_proposal_burn_block_timing_secs_commands() {
     assert!(skip_commit_op_secondary_miner.check(&state));
     skip_commit_op_secondary_miner.apply(&mut state);
 
-    // info!("------------------------- Boot to Epoch 3.0 -------------------------");
     let boot_to_epoch_3 = BootToEpoch3::new(test_context.miners.clone());
     assert!(boot_to_epoch_3.check(&state));
     boot_to_epoch_3.apply(&mut state);
