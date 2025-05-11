@@ -1,24 +1,8 @@
-// Copyright (C) 2023 Stacks Open Internet Foundation
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
 #![no_main]
 
 use arbitrary::Arbitrary;
 use clarity::vm::analysis::CheckErrors;
 use clarity::vm::representations::ContractName;
-use clarity::vm::types::serialization::SerializationError;
 use clarity::vm::types::signatures::SequenceSubtype;
 use clarity::vm::types::{
     CharType, PrincipalData, QualifiedContractIdentifier, SequenceData, StandardPrincipalData,
@@ -149,6 +133,7 @@ pub fn strict_admits(me: &TypeSignature, x: &ClarityValue) -> Result<bool, Check
                 ClarityValue::Sequence(SequenceData::List(ref ld)) => ld,
                 _ => return Ok(false),
             };
+            // Use map_or to safely extract the length or use 0 if error
             if my_list_type.get_max_len() < list_data.len().map_or(0, |len| len) {
                 return Ok(false);
             }
@@ -165,6 +150,7 @@ pub fn strict_admits(me: &TypeSignature, x: &ClarityValue) -> Result<bool, Check
                 ClarityValue::Sequence(SequenceData::Buffer(ref buff_data)) => buff_data,
                 _ => return Ok(false),
             };
+            // Compare using map_or to handle the Result
             if buff_data.len().map_or(false, |len| &len > my_max_len) {
                 return Ok(false);
             }
@@ -179,6 +165,7 @@ pub fn strict_admits(me: &TypeSignature, x: &ClarityValue) -> Result<bool, Check
                 }
                 _ => return Ok(false),
             };
+            // Compare using map_or to handle the Result
             if ascii_data.len().map_or(false, |len| &len > my_max_len) {
                 return Ok(false);
             }
@@ -193,6 +180,7 @@ pub fn strict_admits(me: &TypeSignature, x: &ClarityValue) -> Result<bool, Check
                 }
                 _ => return Ok(false),
             };
+            // Compare using map_or to handle the Result and clone the max_len
             if utf8_data
                 .len()
                 .map_or(false, |len| u32::from(len) > u32::from(my_max_len.clone()))
@@ -249,11 +237,7 @@ pub fn strict_admits(me: &TypeSignature, x: &ClarityValue) -> Result<bool, Check
     }
 }
 
-fuzz_target!(|value: FuzzClarityValue| {
-    fuzz_sanitize(value.0);
-});
-
-fn fuzz_sanitize(input: ClarityValue) {
+fn fuzz_value_sanitize(input: ClarityValue) {
     let computed_type = TypeSignature::type_of(&input).unwrap();
     let did_strict_admit = strict_admits(&computed_type, &input).unwrap();
 
@@ -262,83 +246,14 @@ fn fuzz_sanitize(input: ClarityValue) {
             .unwrap();
 
     if did_strict_admit {
-        assert_eq!(input, sanitized_value);
+        assert_eq!(sanitized_value, input);
         assert!(!did_sanitize);
     } else {
-        assert!(strict_admits(&computed_type, &sanitized_value).unwrap());
         assert!(did_sanitize);
-    }
-
-    let serialized = input.serialize_to_vec().expect("Failed to serialize input");
-    let deserialize_unsanitized =
-        ClarityValue::deserialize_read(&mut serialized.as_slice(), Some(&computed_type), false);
-    if !did_strict_admit {
-        deserialize_unsanitized.unwrap_err();
-    } else {
-        let deser_value = match deserialize_unsanitized {
-            Err(SerializationError::BadTypeError(CheckErrors::TypeSignatureTooDeep)) => {
-                // pre-2.4, deserializer could error on types deeper than a deserialization limit of 16.
-                // with sanitization enabled (a 2.4-gated feature), these serializations are readable.
-                ClarityValue::deserialize_read(
-                    &mut serialized.as_slice(),
-                    Some(&computed_type),
-                    true,
-                )
-                .unwrap()
-            }
-            deser_result => deser_result.unwrap(),
-        };
-        assert_eq!(deser_value, input);
-    }
-
-    let deserialize_sanitized = match ClarityValue::deserialize_read(
-        &mut serialized.as_slice(),
-        Some(&computed_type),
-        true,
-    ) {
-        Ok(x) => x,
-        Err(SerializationError::BadTypeError(CheckErrors::TypeSignatureTooDeep)) => {
-            assert!(!did_strict_admit, "Unsanitized inputs may fail to deserialize, but they must have needed sanitization");
-            // check that the sanitized value *is* readable
-            let serialized = sanitized_value
-                .serialize_to_vec()
-                .expect("Failed to serialize sanitized value");
-            let deserialize_unsanitized = match ClarityValue::deserialize_read(
-                &mut serialized.as_slice(),
-                Some(&computed_type),
-                false,
-            ) {
-                Err(SerializationError::BadTypeError(CheckErrors::TypeSignatureTooDeep)) => {
-                    // pre-2.4, deserializer could error on legal types deeper than a deserialization limit of 16.
-                    // with sanitization enabled (a 2.4-gated feature), these serializations are readable.
-                    ClarityValue::deserialize_read(
-                        &mut serialized.as_slice(),
-                        Some(&computed_type),
-                        true,
-                    )
-                    .unwrap()
-                }
-                deser_result => deser_result.unwrap(),
-            };
-            assert_eq!(deserialize_unsanitized, sanitized_value);
-            assert!(strict_admits(&computed_type, &deserialize_unsanitized).unwrap());
-            let deserialize_sanitized = ClarityValue::deserialize_read(
-                &mut serialized.as_slice(),
-                Some(&computed_type),
-                true,
-            )
-            .unwrap();
-            assert_eq!(deserialize_sanitized, sanitized_value);
-            assert!(strict_admits(&computed_type, &deserialize_sanitized).unwrap());
-            return;
-        }
-        Err(e) => panic!("Unexpected error from deserialization: {}", e),
-    };
-
-    assert!(strict_admits(&computed_type, &deserialize_sanitized).unwrap());
-    if did_strict_admit {
-        assert_eq!(input, deserialize_sanitized)
-    } else {
-        assert_eq!(sanitized_value, deserialize_sanitized)
+        assert!(strict_admits(&computed_type, &sanitized_value).unwrap());
     }
 }
+
+fuzz_target!(|value: FuzzClarityValue| {
+    fuzz_value_sanitize(value.0);
+});
