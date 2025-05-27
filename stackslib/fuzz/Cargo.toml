@@ -45,3 +45,10 @@ path = "fuzz_targets/call_read_endpoint_try_parse_req.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "call_read_endpoint_try_parse_gen"
+path = "fuzz_targets/call_read_endpoint_try_parse_gen.rs"
+test = false
+doc = false
+bench = false
