@@ -9,53 +9,64 @@ use clarity::vm::costs::ExecutionCost;
 use libfuzzer_sys::fuzz_target;
 use serde_json::json;
 
+const MAX_MEMORY_LIMIT: u32 = 1024 * 1024; // 1MB
+const TEST_PORT: u16 = 20443;
+const TEST_HOST: &str = "localhost";
+const CALL_READ_BASE_PATH: &str = "/v2/contracts/call-read/";
+
 fuzz_target!(|data: &[u8]| {
     if data.is_empty() {
         return;
     }
 
-    // Use the input data as both the sender and the path. This makes the fuzz
-    // target a raw one, allowing any input to be thrown at `call-read`'s
-    // `try_parse_request` method.
-    let sender_data = String::from_utf8_lossy(data).to_string();
-    let path = String::from_utf8_lossy(data).to_string();
+    let input_string = String::from_utf8_lossy(data).to_string();
+    let body_string = create_json_body(&input_string);
+    let body = body_string.as_bytes();
 
-    let json_body = json!({
-        "sender": sender_data,
+    let preamble = create_dynamic_preamble(&input_string, body.len());
+
+    let (decoded_path, query) = match decode_request_path(&preamble.path_and_query_str) {
+        Ok(result) => result,
+        Err(_) => return,
+    };
+
+    let mut handler =
+        RPCCallReadOnlyRequestHandler::new(MAX_MEMORY_LIMIT, ExecutionCost::max_value());
+
+    let captures = match handler.path_regex().captures(&decoded_path) {
+        Some(captures) => captures,
+        None => return,
+    };
+
+    let _result = handler.try_parse_request(
+        &preamble,
+        &captures,
+        (!query.is_empty()).then_some(&query),
+        body,
+    );
+});
+
+fn create_json_body(input_string: &str) -> String {
+    json!({
+        "sender": input_string,
         "arguments": []
-    });
+    })
+    .to_string()
+}
 
-    let stringified_body = json_body.to_string();
-    let body = stringified_body.as_bytes();
-
-    let url = format!("/v2/contracts/call-read/{}", path);
+fn create_dynamic_preamble(path_suffix: &str, content_length: usize) -> HttpRequestPreamble {
+    let url = format!("{}{}", CALL_READ_BASE_PATH, path_suffix);
 
     let mut preamble = HttpRequestPreamble::new(
         HttpVersion::Http11,
         "POST".to_string(),
-        url.to_string(),
-        "localhost".to_string(),
-        20443,
+        url,
+        TEST_HOST.to_string(),
+        TEST_PORT,
         false,
     );
-    preamble.set_content_length(body.len() as u32);
+
+    preamble.set_content_length(content_length as u32);
     preamble.content_type = Some(HttpContentType::JSON);
-
-    if let Ok((decoded_path, query)) = decode_request_path(&preamble.path_and_query_str) {
-        let execution_cost = ExecutionCost::max_value();
-        let mut handler = RPCCallReadOnlyRequestHandler::new(1024 * 1024, execution_cost);
-
-        if let Some(captures) = handler.path_regex().captures(&decoded_path) {
-            let _ = handler.try_parse_request(
-                &preamble,
-                &captures,
-                if query.is_empty() { None } else { Some(&query) },
-                body,
-            );
-        } else {
-            return;
-        }
-    } else {
-        return;
-    }
-});
+    preamble
+}
