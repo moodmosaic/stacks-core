@@ -1,0 +1,74 @@
+use std::thread;
+use std::panic;
+use std::time::Duration;
+
+use crate::burnchains::{Burnchain, BurnchainHeaderHash, burnchain_error};
+
+#[test]
+fn test_handle_thread_join_success() {
+    // Arrange
+    let handle: thread::JoinHandle<Result<u32, burnchain_error>> = 
+        thread::spawn(|| Ok(42));
+    
+    // Act
+    let result = Burnchain::handle_thread_join(handle, "test");
+    
+    // Assert
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), 42);
+}
+
+#[test]
+fn test_handle_thread_join_thread_error() {
+    // Arrange
+    let handle: thread::JoinHandle<Result<u32, burnchain_error>> = 
+        thread::spawn(|| Err(burnchain_error::NetworkError("Thread failed".into())));
+    
+    // Act
+    let result = Burnchain::handle_thread_join(handle, "test");
+    
+    // Assert
+    assert!(result.is_err());
+    match result {
+        Err(burnchain_error::NetworkError(_)) => {}, // Expected
+        _ => panic!("Expected NetworkError"),
+    }
+}
+
+#[test]
+fn test_handle_thread_join_panic() {
+    // Arrange
+    let handle: thread::JoinHandle<Result<u32, burnchain_error>> = 
+        thread::spawn(|| {
+            panic!("Thread panicked");
+            #[allow(unreachable_code)]
+            Ok(42)
+        });
+    
+    // Act
+    let result = Burnchain::handle_thread_join(handle, "test");
+    
+    // Assert
+    assert!(result.is_err());
+    match result {
+        Err(burnchain_error::ThreadChannelError) => {}, // Expected
+        _ => panic!("Expected ThreadChannelError"),
+    }
+}
+
+#[test]
+fn test_handle_thread_join_delayed_result() {
+    // Arrange - test thread that takes some time before completing
+    let handle: thread::JoinHandle<Result<u32, burnchain_error>> = 
+        thread::spawn(|| {
+            thread::sleep(Duration::from_millis(100));
+            Ok(42)
+        });
+    
+    // Act
+    let result = Burnchain::handle_thread_join(handle, "test");
+    
+    // Assert
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), 42);
+}
