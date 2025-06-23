@@ -17,8 +17,8 @@
 pub mod affirmation;
 pub mod burnchain;
 pub mod db;
-pub mod test_doubles;
 pub mod sync_with_indexer;
+pub mod test_doubles;
 pub mod thread_join;
 
 use std::collections::HashMap;
