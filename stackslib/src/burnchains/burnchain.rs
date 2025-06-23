@@ -1803,12 +1803,11 @@ impl Burnchain {
             }
         }
 
-        // join up - capture results from all threads to ensure proper error handling
+        // join up
         let download_result = Self::handle_thread_join(download_thread, "download");
         let parse_result = Self::handle_thread_join(parse_thread, "parse");
         let db_result = Self::handle_thread_join(db_thread, "db");
 
-        // Check results in order of dependency
         if let Err(e) = download_result {
             warn!("Download thread failed: {:?}", e);
             return Err(e);
@@ -1820,7 +1819,6 @@ impl Burnchain {
         }
 
         let block_header = db_result?;
-
         if block_header.block_height < end_block {
             warn!(
                 "Try synchronizing the burn chain again: final snapshot {} < {}",
