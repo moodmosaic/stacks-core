@@ -454,27 +454,24 @@ impl BurnchainBlock {
 }
 
 impl Burnchain {
-    /// Handles joining a thread and propagating any errors.
-    /// This centralizes error handling for thread join operations.
+    // Join thread and propagate error.
     pub fn handle_thread_join<T>(
         handle: std::thread::JoinHandle<Result<T, burnchain_error>>,
-        thread_name: &str,
+        name: &str,
     ) -> Result<T, burnchain_error> {
         match handle.join() {
-            Ok(thread_result) => match thread_result {
-                Ok(value) => Ok(value),
-                Err(e) => {
-                    warn!("Error from {} thread: {:?}", thread_name, &e);
-                    Err(e)
-                }
-            },
+            Ok(Ok(val)) => Ok(val),
+            Ok(Err(e)) => {
+                warn!("{} thread error: {:?}", name, e);
+                Err(e)
+            }
             Err(_) => {
-                error!("Thread join failed: {} thread panicked", thread_name);
-                // Use existing error type for thread errors
+                error!("{} thread panicked", name);
                 Err(burnchain_error::ThreadChannelError)
             }
         }
     }
+
     pub fn new(
         working_dir: &str,
         chain_name: &str,

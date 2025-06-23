@@ -1,21 +1,5 @@
-//! Test Doubles for burnchain synchronization tests.
-//!
-//! Hierarchy of Test Doubles:
-//!
-//! ```text
-//!                      +---------------+
-//!                      | Test Double   |
-//!                      +---------------+
-//!                              |
-//!                              |
-//!       +--------+--------+--------+--------+--------+
-//!       |        |        |        |        |        |
-//!   +--------+ +--------+ +--------+ +--------+ +--------+
-//!   | Dummy  | | Stub   | | Spy    | | Mock   | | Fake   |
-//!   +--------+ +--------+ +--------+ +--------+ +--------+
-//! ```
-//!
-//! Reference: *xUnit Test Patterns: Refactoring Test Code* by Gerard Meszaros.
+// Burnchain sync test doubles.
+// With respect to the xUnit Test Patterns book by Gerard Meszaros.
 
 use mockall::predicate::*;
 use mockall::*;
@@ -30,7 +14,57 @@ use crate::burnchains::{BurnchainBlock, BurnchainBlockHeader, Error as burnchain
 use crate::core::{EpochList, StacksEpochId};
 use crate::util_lib::db::Error as DBError;
 
-// Simple Header IPC for testing
+// Stub block with canned values.
+pub struct StubBlock {
+    pub height: u64,
+    pub hash: BurnchainHeaderHash,
+    pub parent_hash: BurnchainHeaderHash,
+}
+
+impl StubBlock {
+    pub fn new(height: u64, hash: BurnchainHeaderHash) -> Self {
+        let parent = if height == 0 {
+            BurnchainHeaderHash::zero()
+        } else {
+            let hex = format!("{:064x}", height - 1);
+            BurnchainHeaderHash::from_hex(&hex).unwrap()
+        };
+        Self {
+            height,
+            hash,
+            parent_hash: parent,
+        }
+    }
+
+    pub fn to_header(&self) -> BurnchainBlockHeader {
+        BurnchainBlockHeader {
+            block_height: self.height,
+            block_hash: self.hash.clone(),
+            parent_block_hash: self.parent_hash.clone(),
+            num_txs: 0,
+            timestamp: 0,
+        }
+    }
+
+    pub fn to_block_data(&self) -> BurnchainBlockData {
+        BurnchainBlockData {
+            header: self.to_header(),
+            ops: vec![],
+        }
+    }
+
+    pub fn to_block(&self) -> BitcoinBlock {
+        BitcoinBlock {
+            block_height: self.height,
+            block_hash: self.hash.clone(),
+            parent_block_hash: self.parent_hash.clone(),
+            txs: vec![],
+            timestamp: 0,
+        }
+    }
+}
+
+// Test header. Just height and hash.
 #[derive(Clone, Debug)]
 pub struct TestHeaderIPC {
     pub height: u64,
@@ -38,7 +72,7 @@ pub struct TestHeaderIPC {
 }
 
 impl BurnHeaderIPC for TestHeaderIPC {
-    type H = TestHeaderIPC;
+    type H = Self;
 
     fn height(&self) -> u64 {
         self.height
@@ -53,7 +87,7 @@ impl BurnHeaderIPC for TestHeaderIPC {
     }
 }
 
-// Simple Block IPC for testing
+// Test block. Header plus bytes.
 #[derive(Clone, Debug)]
 pub struct TestBlockIPC {
     pub header: TestHeaderIPC,
@@ -62,7 +96,7 @@ pub struct TestBlockIPC {
 
 impl BurnBlockIPC for TestBlockIPC {
     type H = TestHeaderIPC;
-    type B = TestBlockIPC;
+    type B = Self;
 
     fn height(&self) -> u64 {
         self.header.height
@@ -77,29 +111,27 @@ impl BurnBlockIPC for TestBlockIPC {
     }
 }
 
-// Mock for BurnchainHeaderReader trait
+// Mock DB header reader.
 mock! {
     pub MockBurnchainHeaderReader {}
 
     impl BurnchainHeaderReader for MockBurnchainHeaderReader {
         fn read_burnchain_headers(
-            &self,
-            start_height: u64,
-            end_height: u64
+            &self, start: u64, end: u64,
         ) -> Result<Vec<BurnchainBlockHeader>, DBError>;
 
         fn get_burnchain_headers_height(&self) -> Result<u64, DBError>;
 
         fn find_burnchain_header_height(
-            &self,
-            hash: &BurnchainHeaderHash
+            &self, hash: &BurnchainHeaderHash,
         ) -> Result<Option<u64>, DBError>;
     }
 }
 
-// Mock BurnchainBlockDownloader
+// Mock block downloader.
 mock! {
     pub Downloader<H = TestHeaderIPC, B = TestBlockIPC> {}
+
     impl<H, B> BurnchainBlockDownloader for Downloader<H, B>
     where
         H: BurnHeaderIPC + Sync + Send + Clone,
@@ -108,66 +140,87 @@ mock! {
         type H = H;
         type B = B;
 
-        fn download(&mut self, header: &H) -> Result<B, burnchain_error>;
+        fn download(&mut self, header: &H)
+            -> Result<B, burnchain_error>;
     }
 }
 
-// Mock BurnchainBlockParser
+// Mock block parser.
 mock! {
-    pub BlockParser<D: BurnchainBlockDownloader + Sync + Send = MockDownloader<TestHeaderIPC, TestBlockIPC>> {}
+    pub BlockParser<
+        D: BurnchainBlockDownloader + Sync + Send =
+            MockDownloader<TestHeaderIPC, TestBlockIPC>
+    > {}
+
     impl<D> BurnchainBlockParser for BlockParser<D>
-    where D: BurnchainBlockDownloader + Sync + Send
+    where
+        D: BurnchainBlockDownloader + Sync + Send,
     {
         type D = D;
 
         fn parse(
             &mut self,
-            block: &<<Self as BurnchainBlockParser>::D as BurnchainBlockDownloader>::B,
+            block: &<<Self as BurnchainBlockParser>::D
+                as BurnchainBlockDownloader>::B,
             epoch_id: StacksEpochId,
         ) -> Result<BurnchainBlock, burnchain_error>;
     }
 }
 
-// Mock BurnchainIndexer
+// Mock indexer. Implements trait and one extra method.
 mock! {
     pub Indexer<P: BurnchainBlockParser + Send + Sync> {
-        pub fn process_block(&self, block_data: &BurnchainBlockData) -> Result<(), burnchain_error>;
+        pub fn process_block(
+            &self, block: &BurnchainBlockData,
+        ) -> Result<(), burnchain_error>;
     }
-    impl<P: BurnchainBlockParser + Send + Sync> BurnchainIndexer for Indexer<P>
+
+    impl<P: BurnchainBlockParser + Send + Sync> BurnchainIndexer
+        for Indexer<P>
     {
         type P = P;
 
         fn connect(&mut self) -> Result<(), burnchain_error>;
         fn get_first_block_height(&self) -> u64;
-        fn get_first_block_header_hash(&self) -> Result<BurnchainHeaderHash, burnchain_error>;
-        fn get_first_block_header_timestamp(&self) -> Result<u64, burnchain_error>;
+        fn get_first_block_header_hash(&self)
+            -> Result<BurnchainHeaderHash, burnchain_error>;
+        fn get_first_block_header_timestamp(&self)
+            -> Result<u64, burnchain_error>;
         fn get_stacks_epochs(&self) -> EpochList;
         fn get_headers_path(&self) -> String;
         fn get_headers_height(&self) -> Result<u64, burnchain_error>;
-        fn get_highest_header_height(&self) -> Result<u64, burnchain_error>;
+        fn get_highest_header_height(&self)
+            -> Result<u64, burnchain_error>;
         fn find_chain_reorg(&mut self) -> Result<u64, burnchain_error>;
         fn sync_headers(
             &mut self,
-            start_height: u64,
-            end_height: Option<u64>,
+            start: u64,
+            end: Option<u64>,
         ) -> Result<u64, burnchain_error>;
-        fn drop_headers(&mut self, new_height: u64) -> Result<(), burnchain_error>;
-        fn read_headers(&self, start_block: u64, end_block: u64) -> Result<Vec<<P::D as BurnchainBlockDownloader>::H>, burnchain_error>;
+        fn drop_headers(
+            &mut self, new_height: u64,
+        ) -> Result<(), burnchain_error>;
+        fn read_headers(
+            &self,
+            start: u64,
+            end: u64,
+        ) -> Result<
+            Vec<<P::D as BurnchainBlockDownloader>::H>,
+            burnchain_error,
+        >;
         fn downloader(&self) -> <P as BurnchainBlockParser>::D;
         fn parser(&self) -> P;
         fn reader(&self) -> Self;
     }
 }
 
-// Manually implement Clone for MockIndexer
 impl<P: BurnchainBlockParser + Send + Sync> Clone for MockIndexer<P> {
     fn clone(&self) -> Self {
         MockIndexer::new()
     }
 }
 
-// Test double for BurnchainHeaderReader and BurnchainIndexer traits.
-// Satisfies sync_with_indexer()'s need for both in one object.
+// Combines header reader and indexer traits.
 #[derive(Clone)]
 pub struct BurnchainIndexerTestDouble<
     P = MockBlockParser<MockDownloader<TestHeaderIPC, TestBlockIPC>>,
@@ -183,8 +236,8 @@ where
 {
     fn read_burnchain_headers(
         &self,
-        start_height: u64,
-        end_height: u64,
+        _start: u64,
+        _end: u64,
     ) -> Result<Vec<BurnchainBlockHeader>, DBError> {
         Err(DBError::NotImplemented)
     }
@@ -195,7 +248,7 @@ where
 
     fn find_burnchain_header_height(
         &self,
-        header_hash: &BurnchainHeaderHash,
+        _hash: &BurnchainHeaderHash,
     ) -> Result<Option<u64>, DBError> {
         Err(DBError::NotImplemented)
     }
@@ -243,12 +296,8 @@ where
         self.indexer.find_chain_reorg()
     }
 
-    fn sync_headers(
-        &mut self,
-        start_height: u64,
-        end_height: Option<u64>,
-    ) -> Result<u64, burnchain_error> {
-        self.indexer.sync_headers(start_height, end_height)
+    fn sync_headers(&mut self, start: u64, end: Option<u64>) -> Result<u64, burnchain_error> {
+        self.indexer.sync_headers(start, end)
     }
 
     fn drop_headers(&mut self, new_height: u64) -> Result<(), burnchain_error> {
@@ -257,10 +306,10 @@ where
 
     fn read_headers(
         &self,
-        start_block: u64,
-        end_block: u64,
+        start: u64,
+        end: u64,
     ) -> Result<Vec<<P::D as BurnchainBlockDownloader>::H>, burnchain_error> {
-        self.indexer.read_headers(start_block, end_block)
+        self.indexer.read_headers(start, end)
     }
 
     fn downloader(&self) -> <P as BurnchainBlockParser>::D {
@@ -276,77 +325,24 @@ where
     }
 }
 
-impl<P: BurnchainBlockParser + Send + Sync + 'static> BurnchainIndexerTestDouble<P> {
+impl<P> BurnchainIndexerTestDouble<P>
+where
+    P: BurnchainBlockParser + Send + Sync + 'static,
+{
     pub fn with_components(indexer: MockIndexer<P>) -> Self {
-        BurnchainIndexerTestDouble { indexer }
+        Self { indexer }
     }
 
-    /// Forward clone to components as both implement Clone
     pub fn clone(&self) -> Self {
-        BurnchainIndexerTestDouble {
+        Self {
             indexer: self.indexer.clone(),
         }
     }
 
-    /// Process block method for tests - not part of BurnchainIndexer trait
     pub fn process_block(
         &mut self,
-        block: &BurnchainBlockData,
+        _block: &BurnchainBlockData,
     ) -> Result<Vec<String>, burnchain_error> {
-        // Test implementation that always succeeds
         Ok(vec![])
-    }
-}
-
-// Stub block used in tests. Supplies canned data. No behavior check.
-pub struct StubBlock {
-    pub height: u64,
-    pub hash: BurnchainHeaderHash,
-    pub parent_hash: BurnchainHeaderHash,
-}
-
-impl StubBlock {
-    pub fn new(height: u64, hash: BurnchainHeaderHash) -> Self {
-        // Height 0 blocks use zero as parent hash for simplicity.
-        // Others use height - 1 as parent hash.
-        let parent_hash = if height == 0 {
-            BurnchainHeaderHash::zero()
-        } else {
-            BurnchainHeaderHash::from_hex(&format!("{:064x}", height - 1)).unwrap()
-        };
-        Self {
-            height,
-            hash,
-            parent_hash,
-        }
-    }
-
-    pub fn to_header(&self) -> BurnchainBlockHeader {
-        BurnchainBlockHeader {
-            block_height: self.height,
-            block_hash: self.hash.clone(),
-            parent_block_hash: self.parent_hash.clone(),
-            num_txs: 0,
-            timestamp: 0,
-        }
-    }
-
-    pub fn to_block_data(&self) -> BurnchainBlockData {
-        BurnchainBlockData {
-            header: self.to_header(),
-            ops: Vec::new(),
-        }
-    }
-
-    // Returns BitcoinBlock for use in BurnchainBlock::Bitcoin variant
-    pub fn to_block(&self) -> BitcoinBlock {
-        // Create a minimal BitcoinBlock from the stub data
-        BitcoinBlock {
-            block_height: self.height,
-            block_hash: self.hash.clone(),
-            parent_block_hash: self.parent_hash.clone(),
-            txs: vec![],
-            timestamp: 0,
-        }
     }
 }
