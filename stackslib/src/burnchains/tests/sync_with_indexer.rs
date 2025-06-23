@@ -1,13 +1,17 @@
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool};
 
-use mockall::predicate::*;
+use crate::burnchains::Burnchain;
+use crate::burnchains::Error as burnchain_error;
+use crate::burnchains::bitcoin::{Error as bitcoin_error};
+use crate::chainstate::coordinator::comm::CoordinatorCommunication;
 
-use crate::burnchains::{Burnchain, BurnchainHeaderHash, CoordinatorChannels, burnchain_error};
-use crate::burnchains::tests::test_doubles::{StubBlock, BurnchainIndexerTestDouble, MockDownloader, MockBlockParser};
-use crate::burnchains::{BurnchainBlockData, BurnchainBlockHeader, BurnchainHeaderIPC, BurnchainBlockIPC};
+use crate::burnchains::tests::test_doubles::{StubBlock, MockDownloader, MockBlockParser, MockIndexer, BurnchainIndexerTestDouble, TestHeaderIPC, TestBlockIPC};
+
+use crate::burnchains::BurnchainBlockHeader;
+use crate::burnchains::BurnchainBlock;
+
+use stacks_common::types::chainstate::{BurnchainHeaderHash, TrieHash};
 
 // Helper for testing thread error scenarios
 struct TestErrorConfig {
@@ -26,51 +30,45 @@ fn test_sync_with_indexer_happy_path() {
     // Create mock blocks
     let blocks = vec![
         StubBlock::new(0, BurnchainHeaderHash::zero()),
-        StubBlock::new(1, BurnchainHeaderHash::from_test_data(&[1])),
-        StubBlock::new(2, BurnchainHeaderHash::from_test_data(&[2])),
+        StubBlock::new(1, BurnchainHeaderHash::from_test_data(1, &TrieHash::from_empty_data(), 0)),
+        StubBlock::new(2, BurnchainHeaderHash::from_test_data(2, &TrieHash::from_empty_data(), 0)),
     ];
     
     // Create headers from blocks
     let headers: Vec<BurnchainBlockHeader> = blocks.iter().map(|b| b.to_header()).collect();
     
     // Create a mock indexer using mockall
-    let mut mock_indexer = BurnchainIndexerTestDouble {
-        header_reader: MockBurnchainHeaderReader::new(),
-        indexer: MockIndexer::new(),
-    };
-    
-    // Set up burnchain headers height expectation
-    mock_indexer.header_reader
-        .expect_get_burnchain_headers_height()
-        .returning(|| Ok(2));
-    
-    // Set up read_burnchain_headers expectation
-    mock_indexer.header_reader
-        .expect_read_burnchain_headers()
-        .with(eq(0), eq(3))
-        .returning(move |_start, _count| Ok(headers.clone()));
+    let mut test_double = BurnchainIndexerTestDouble::with_components(
+        MockIndexer::<MockBlockParser<MockDownloader<TestHeaderIPC, TestBlockIPC>>>::new(),
+    );
     
     // Set up mock downloader
-    let mut mock_downloader = MockDownloader::new();
+    let mut mock_downloader = MockDownloader::<TestHeaderIPC, TestBlockIPC>::new();
     mock_downloader
-        .expect_download_blocks()
-        .returning(|_sender| Ok(()));
+        .expect_download()
+        .return_once(|_header| Ok(TestBlockIPC {
+            header: TestHeaderIPC { height: 1, hash: [0; 32] },
+            data: vec![]
+        }));
     
     // Set up mock block parser
     let mut mock_parser = MockBlockParser::new();
     mock_parser
-        .expect_parse_blocks()
-        .returning(|_receiver, _sender| Ok(()));
+        .expect_parse()
+        .return_once(|_block, _epoch_id| {
+            let stub = StubBlock::new(1, BurnchainHeaderHash::from_hex("0000000000000000000000000000000000000001").unwrap());
+            Ok(BurnchainBlock::Bitcoin(stub.to_block()))
+        });
     
     // Configure indexer.get_downloader() to return our mock
-    mock_indexer.indexer
-        .expect_get_downloader()
-        .return_once(move || Box::new(mock_downloader));
+    test_double.indexer
+        .expect_downloader()
+        .return_once(move || mock_downloader);
     
     // Configure indexer.get_block_parser() to return our mock
-    mock_indexer.indexer
-        .expect_get_block_parser()
-        .return_once(move || Box::new(mock_parser));
+    test_double.indexer
+        .expect_parser()
+        .return_once(move || mock_parser);
     
     // Keep track of which blocks were processed
     let processed_blocks = Arc::new(Mutex::new(Vec::new()));
@@ -78,26 +76,27 @@ fn test_sync_with_indexer_happy_path() {
     
     // Configure process_block to record which blocks are processed
     // This is equivalent to checking DB height in the original tests
-    mock_indexer.indexer
+    test_double.indexer
         .expect_process_block()
         .times(3) // Expect exactly 3 calls (blocks 0, 1, 2)
-        .returning(move |_, block_data| {
+        .returning(move |block_data| {
             let mut blocks = processed_blocks_clone.lock().unwrap();
             blocks.push(block_data.header.block_height);
             Ok(())
         });
         
-    // Configure process_headers to return empty epoch list
-    mock_indexer.indexer
-        .expect_process_headers()
-        .returning(|_, _, _, _| Ok(vec![]));
+    // Configure reader to return test double itself
+    let test_double_clone = test_double.clone();
+    test_double.indexer
+        .expect_reader()
+        .returning(move || test_double_clone.indexer.clone());
     
-    let channels = CoordinatorChannels::new();
+    let (_receivers, channels) = CoordinatorCommunication::instantiate();
     let should_keep_running = Some(Arc::new(AtomicBool::new(true)));
     
     // Act
     let result = burnchain.sync_with_indexer(
-        &mut mock_indexer, 
+        &mut test_double, 
         channels,
         Some(2), // Target height
         None,    // Max blocks
@@ -122,57 +121,46 @@ fn test_sync_with_indexer_download_failure() {
     // Create mock blocks
     let blocks = vec![
         StubBlock::new(0, BurnchainHeaderHash::zero()),
-        StubBlock::new(1, BurnchainHeaderHash::from_test_data(&[1])),
-        StubBlock::new(2, BurnchainHeaderHash::from_test_data(&[2])),
+        StubBlock::new(1, BurnchainHeaderHash::from_test_data(1, &TrieHash::from_empty_data(), 0)),
+        StubBlock::new(2, BurnchainHeaderHash::from_test_data(2, &TrieHash::from_empty_data(), 0)),
     ];
     
     // Create headers from blocks
     let headers: Vec<BurnchainBlockHeader> = blocks.iter().map(|b| b.to_header()).collect();
     
     // Create a mock indexer using mockall
-    let mut mock_indexer = BurnchainIndexerTestDouble {
-        header_reader: MockBurnchainHeaderReader::new(),
-        indexer: MockIndexer::new(),
-    };
-    
-    // Set up burnchain headers height expectation
-    mock_indexer.header_reader
-        .expect_get_burnchain_headers_height()
-        .returning(|| Ok(2));
-    
-    // Set up read_burnchain_headers expectation
-    mock_indexer.header_reader
-        .expect_read_burnchain_headers()
-        .with(eq(0), eq(3))
-        .returning(move |_start, _count| Ok(headers.clone()));
+    let mut test_double = BurnchainIndexerTestDouble::with_components(
+        MockIndexer::<MockBlockParser<MockDownloader<TestHeaderIPC, TestBlockIPC>>>::new(),
+    );
     
     // Set up mock downloader that fails
     let mut mock_downloader = MockDownloader::new();
     mock_downloader
-        .expect_download_blocks()
-        .returning(|_sender| Err(burnchain_error::DownloadError));
+        .expect_download()
+        .returning(|_sender| Err(burnchain_error::DownloadError(bitcoin_error::ConnectionError)));
     
     // Set up mock block parser (which should not be called due to failure)
     let mut mock_parser = MockBlockParser::new();
     
     // Configure indexer.get_downloader() to return our mock
-    mock_indexer.indexer
-        .expect_get_downloader()
-        .return_once(move || Box::new(mock_downloader));
+    test_double.indexer
+        .expect_downloader()
+        .return_once(move || mock_downloader);
     
     // Configure indexer.get_block_parser() to return our mock
-    mock_indexer.indexer
-        .expect_get_block_parser()
-        .return_once(move || Box::new(mock_parser));
+    test_double.indexer
+        .expect_parser()
+        .return_once(move || mock_parser);
     
     // We don't need to configure process_block as it shouldn't be called
     
     // Configure process_headers to return empty epoch list in case it's called
-    mock_indexer.indexer
-        .expect_process_headers()
-        .returning(|_, _, _, _| Ok(vec![]));
+    let test_double_clone2 = test_double.clone();
+    test_double.indexer
+        .expect_reader()
+        .returning(move || test_double_clone2.indexer.clone());
     
-    let channels = CoordinatorChannels::new();
+    let (_receivers, channels) = CoordinatorCommunication::instantiate();
     let should_keep_running = Some(Arc::new(AtomicBool::new(true)));
     
     // Track which blocks are processed - in failure case, we should not see block 2 processed
@@ -181,9 +169,9 @@ fn test_sync_with_indexer_download_failure() {
     
     // We might see process_block called for lower height blocks prior to download failure
     // But we should never see it called more than 2 times (blocks 0 & 1)
-    mock_indexer.indexer
+    test_double.indexer
         .expect_process_block()
-        .returning(move |_, block_data| {
+        .returning(move |block_data| {
             let mut blocks = processed_blocks_clone.lock().unwrap();
             blocks.push(block_data.header.block_height);
             Ok(())
@@ -191,7 +179,7 @@ fn test_sync_with_indexer_download_failure() {
         
     // Act
     let result = burnchain.sync_with_indexer(
-        &mut mock_indexer, 
+        &mut test_double, 
         channels,
         Some(2), // Target height
         None,    // Max blocks
@@ -202,7 +190,7 @@ fn test_sync_with_indexer_download_failure() {
     assert!(result.is_err(), "Expected sync to fail but it succeeded");
     
     if let Err(e) = result {
-        assert!(matches!(e, burnchain_error::DownloadError), "Expected DownloadError, got {:?}", e);
+        assert!(matches!(e, burnchain_error::DownloadError(_)), "Expected DownloadError, got {:?}", e);
     }
     
     // Verify that blocks at height 2 never processed (due to download failure)
@@ -263,68 +251,65 @@ fn run_error_precedence_test(test_config: TestErrorConfig) {
     // Create mock blocks
     let blocks = vec![
         StubBlock::new(0, BurnchainHeaderHash::zero()),
-        StubBlock::new(1, BurnchainHeaderHash::from_test_data(&[1])),
-        StubBlock::new(2, BurnchainHeaderHash::from_test_data(&[2])),
+        StubBlock::new(1, BurnchainHeaderHash::from_test_data(1, &TrieHash::from_empty_data(), 0)),
+        StubBlock::new(2, BurnchainHeaderHash::from_test_data(2, &TrieHash::from_empty_data(), 0)),
     ];
     
     // Create headers from blocks
     let headers: Vec<BurnchainBlockHeader> = blocks.iter().map(|b| b.to_header()).collect();
     
     // Create a mock indexer using mockall
-    let mut mock_indexer = BurnchainIndexerTestDouble {
-        header_reader: MockBurnchainHeaderReader::new(),
-        indexer: MockIndexer::new(),
-    };
-    
-    // Set up burnchain headers height expectation
-    mock_indexer.header_reader
-        .expect_get_burnchain_headers_height()
-        .returning(|| Ok(2));
-    
-    // Set up read_burnchain_headers expectation
-    mock_indexer.header_reader
-        .expect_read_burnchain_headers()
-        .with(eq(0), eq(3))
-        .returning(move |_start, _count| Ok(headers.clone()));
+    let mut test_double = BurnchainIndexerTestDouble::with_components(
+        MockIndexer::<MockBlockParser<MockDownloader<TestHeaderIPC, TestBlockIPC>>>::new(),
+    );
     
     // Set up mock downloader based on test_config
     let mut mock_downloader = MockDownloader::new();
     if test_config.download_error {
         mock_downloader
-            .expect_download_blocks()
-            .returning(|_sender| Err(burnchain_error::DownloadError));
+            .expect_download()
+            .returning(|_header| Err(burnchain_error::DownloadError(bitcoin_error::ConnectionError)));
     } else {
         mock_downloader
-            .expect_download_blocks()
-            .returning(|_sender| Ok(()));
+            .expect_download()
+            .returning(|_header| {
+                Ok(TestBlockIPC {
+                    header: TestHeaderIPC { height: 1, hash: [0; 32] },
+                    data: vec![]
+                })
+            });
     }
     
     // Set up mock block parser based on test_config
     let mut mock_parser = MockBlockParser::new();
     if test_config.parse_error {
         mock_parser
-            .expect_parse_blocks()
-            .returning(|_receiver, _sender| Err(burnchain_error::ParseError));
+            .expect_parse()
+            .returning(|_block, _epoch_id| Err(burnchain_error::ParseError));
     } else {
         mock_parser
-            .expect_parse_blocks()
-            .returning(|_receiver, _sender| Ok(()));
+            .expect_parse()
+            .returning(|_block, _epoch_id| {
+                let stub = StubBlock::new(1, BurnchainHeaderHash::from_hex("0000000000000000000000000000000000000001").unwrap());
+                Ok(BurnchainBlock::Bitcoin(stub.to_block()))
+            });
     }
     
     // Configure indexer.get_downloader() to return our mock
-    mock_indexer.indexer
-        .expect_get_downloader()
-        .return_once(move || Box::new(mock_downloader));
+    test_double.indexer
+        .expect_downloader()
+        .return_once(move || mock_downloader);
     
     // Configure indexer.get_block_parser() to return our mock
-    mock_indexer.indexer
-        .expect_get_block_parser()
-        .return_once(move || Box::new(mock_parser));
+    test_double.indexer
+        .expect_parser()
+        .return_once(move || mock_parser);
     
-    // Configure process_headers to return empty epoch list
-    mock_indexer.indexer
-        .expect_process_headers()
-        .returning(|_, _, _, _| Ok(vec![]));
+    // Configure reader to return test double itself
+    let test_double_clone = test_double.clone();
+    test_double.indexer
+        .expect_reader()
+        .returning(move || test_double_clone.indexer.clone());
     
     // Keep track of processed blocks to verify error scenarios work correctly
     let processed_blocks = Arc::new(Mutex::new(Vec::new()));
@@ -334,53 +319,53 @@ fn run_error_precedence_test(test_config: TestErrorConfig) {
     if test_config.download_error {
         // With download error, process_block should never be called
         // mockall will automatically fail the test if it's called unexpectedly
-        mock_indexer.indexer
+        test_double.indexer
             .expect_process_block()
             .times(0) // Should never be called due to early download error
-            .returning(|_, _| Ok(()));
+            .returning(|_| Ok(()));
     } else if test_config.parse_error {
         // With parse error, process_block should never be called
-        mock_indexer.indexer
+        test_double.indexer
             .expect_process_block()
             .times(0) // Should never be called due to early parse error
-            .returning(|_, _| Ok(())); 
+            .returning(|_| Ok(())); 
     } else if test_config.db_error {
         // With DB error, process_block gets called but returns error
-        mock_indexer.indexer
+        test_double.indexer
             .expect_process_block()
-            .returning(move |_, block_data| {
+            .returning(move |block_data| {
                 let mut blocks = processed_blocks_clone.lock().unwrap();
                 blocks.push(block_data.header.block_height);
-                Err(burnchain_error::DBError("Test DB error".into()))
+                Err(burnchain_error::DBError(crate::util_lib::db::Error::SqliteError(rusqlite::Error::ExecuteReturnedResults)))
             });
     } else {
         // No errors - process_block should succeed
-        mock_indexer.indexer
+        test_double.indexer
             .expect_process_block()
-            .returning(move |_, block_data| {
+            .returning(move |block_data| {
                 let mut blocks = processed_blocks_clone.lock().unwrap();
                 blocks.push(block_data.header.block_height);
                 Ok(())
             });
     }
     
-    let channels = CoordinatorChannels::new();
+    let (_receivers, channels) = CoordinatorCommunication::instantiate();
     let should_keep_running = Some(Arc::new(AtomicBool::new(true)));
     
     // Determine expected error type based on precedence
     let expected_error = if test_config.download_error {
-        burnchain_error::DownloadError
+        burnchain_error::DownloadError(bitcoin_error::ConnectionError)
     } else if test_config.parse_error {
         burnchain_error::ParseError
     } else if test_config.db_error {
-        burnchain_error::DBError("Test DB error".into())
+        burnchain_error::DBError(crate::util_lib::db::Error::SqliteError(rusqlite::Error::ExecuteReturnedResults))
     } else {
         panic!("At least one error flag should be set");
     };
     
     // Act
     let result = burnchain.sync_with_indexer(
-        &mut mock_indexer, 
+        &mut test_double, 
         channels,
         Some(2), // Target height
         None,    // Max blocks
@@ -391,7 +376,7 @@ fn run_error_precedence_test(test_config: TestErrorConfig) {
     assert!(result.is_err(), "Expected sync to fail but it succeeded");
     
     match (result.err().unwrap(), expected_error) {
-        (burnchain_error::DownloadError, burnchain_error::DownloadError) => {},
+        (burnchain_error::DownloadError(_), burnchain_error::DownloadError(_)) => {},
         (burnchain_error::ParseError, burnchain_error::ParseError) => {},
         (burnchain_error::DBError(_), burnchain_error::DBError(_)) => {},
         (actual, expected) => {

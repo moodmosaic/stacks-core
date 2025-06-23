@@ -2,7 +2,9 @@ use std::thread;
 use std::panic;
 use std::time::Duration;
 
-use crate::burnchains::{Burnchain, BurnchainHeaderHash, burnchain_error};
+use crate::burnchains::Burnchain;
+use crate::burnchains::bitcoin::Error as bitcoin_error;
+use crate::burnchains::Error as burnchain_error;
 
 #[test]
 fn test_handle_thread_join_success() {
@@ -22,7 +24,7 @@ fn test_handle_thread_join_success() {
 fn test_handle_thread_join_thread_error() {
     // Arrange
     let handle: thread::JoinHandle<Result<u32, burnchain_error>> = 
-        thread::spawn(|| Err(burnchain_error::NetworkError("Thread failed".into())));
+        thread::spawn(|| Err(burnchain_error::DownloadError(bitcoin_error::ConnectionError)));
     
     // Act
     let result = Burnchain::handle_thread_join(handle, "test");
@@ -30,8 +32,8 @@ fn test_handle_thread_join_thread_error() {
     // Assert
     assert!(result.is_err());
     match result {
-        Err(burnchain_error::NetworkError(_)) => {}, // Expected
-        _ => panic!("Expected NetworkError"),
+        Err(burnchain_error::DownloadError(_)) => {}, // Expected
+        _ => panic!("Expected DownloadError"),
     }
 }
 
