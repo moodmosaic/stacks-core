@@ -16,62 +16,83 @@
 use std::time::Duration;
 use std::{panic, thread};
 
+use proptest::prelude::*;
+
 use crate::burnchains::bitcoin::Error as bitcoin_error;
 use crate::burnchains::{Burnchain, Error as burnchain_error};
 
 #[test]
 fn join_success() {
-    let handle: thread::JoinHandle<Result<u32, burnchain_error>> = thread::spawn(|| Ok(42));
-
-    let result = Burnchain::handle_thread_join(handle, "test");
-
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 42);
+    proptest!(|(v in any::<u32>())| {
+        let h = thread::spawn(move || Ok(v));
+        let r = Burnchain::handle_thread_join::<u32>(h, "test");
+        prop_assert!(r.is_ok());
+        prop_assert_eq!(r.unwrap(), v);
+    });
 }
 
 #[test]
-fn join_returns_error() {
-    let handle: thread::JoinHandle<Result<u32, burnchain_error>> = thread::spawn(|| {
-        Err(burnchain_error::DownloadError(
-            bitcoin_error::ConnectionError,
-        ))
+fn join_with_name() {
+    proptest!(|(s in "[a-zA-Z0-9_-]{1,20}")| {
+        let h = thread::spawn(|| Ok(42));
+        let r = Burnchain::handle_thread_join::<u32>(h, &s);
+        prop_assert!(r.is_ok());
+        prop_assert_eq!(r.unwrap(), 42);
     });
+}
 
-    let result = Burnchain::handle_thread_join(handle, "test");
+#[test]
+fn join_download_error() {
+    proptest!(|(x in any::<u32>())| {
+        let h = thread::spawn(move || {
+            let _ = x;
+            Err(burnchain_error::DownloadError(
+                bitcoin_error::ConnectionError))
+        });
+        let r = Burnchain::handle_thread_join::<u32>(h, "test");
+        prop_assert!(r.is_err());
+        match r {
+            Err(burnchain_error::DownloadError(_)) => {}
+            _ => return Err(TestCaseError::fail("Expected DownloadError")),
+        }
+    });
+}
 
-    assert!(result.is_err());
-    match result {
-        Err(burnchain_error::DownloadError(_)) => {}
-        _ => panic!("Expected DownloadError"),
+#[test]
+fn join_parse_error() {
+    let h = thread::spawn(move || Err(burnchain_error::ParseError));
+    let r = Burnchain::handle_thread_join::<u32>(h, "test");
+    assert!(r.is_err());
+    match r {
+        Err(burnchain_error::ParseError) => {}
+        _ => panic!("Expected ParseError"),
     }
+}
+
+#[test]
+fn join_delay() {
+    proptest!(|(d in 10u64..100, v in any::<u32>())| {
+        let h = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(d));
+            Ok(v)
+        });
+        let r = Burnchain::handle_thread_join::<u32>(h, "test");
+        prop_assert!(r.is_ok());
+        prop_assert_eq!(r.unwrap(), v);
+    });
 }
 
 #[test]
 fn join_panics() {
-    let handle: thread::JoinHandle<Result<u32, burnchain_error>> = thread::spawn(|| {
+    let h = thread::spawn(|| {
         panic!("boom");
         #[allow(unreachable_code)]
         Ok(42)
     });
-
-    let result = Burnchain::handle_thread_join(handle, "test");
-
-    assert!(result.is_err());
-    match result {
+    let r = Burnchain::handle_thread_join::<u32>(h, "test");
+    assert!(r.is_err());
+    match r {
         Err(burnchain_error::ThreadChannelError) => {}
         _ => panic!("Expected ThreadChannelError"),
     }
-}
-
-#[test]
-fn join_with_delay() {
-    let handle: thread::JoinHandle<Result<u32, burnchain_error>> = thread::spawn(|| {
-        thread::sleep(Duration::from_millis(100));
-        Ok(42)
-    });
-
-    let result = Burnchain::handle_thread_join(handle, "test");
-
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 42);
 }
