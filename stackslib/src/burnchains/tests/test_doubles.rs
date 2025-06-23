@@ -308,7 +308,7 @@ impl StubBlock {
         let parent_hash = if height == 0 {
             BurnchainHeaderHash::zero()
         } else {
-            BurnchainHeaderHash::from_hex(&format!("{:016x}", height - 1)).unwrap()
+            BurnchainHeaderHash::from_hex(&format!("{:064x}", height - 1)).unwrap()
         };
         Self { height, hash, parent_hash }
     }
