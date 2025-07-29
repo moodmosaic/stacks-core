@@ -6,12 +6,22 @@ import { test } from "vitest";
 
 import { Claim } from "./commands/Claim";
 import { ClaimErr } from "./commands/ClaimErr";
+import { ClaimWithInvariants } from "./commands/ClaimWithInvariants";
+import { ClaimStressTest } from "./commands/ClaimStressTest";
 import { MineBlocks } from "./commands/MineBlocks";
+import { MineBlocksAdvanced } from "./commands/MineBlocksAdvanced";
+import { MineBlocksBoundary } from "./commands/MineBlocksBoundary";
 import { Mint } from "./commands/Mint";
 import { MintInitial } from "./commands/MintInitial";
+
+import { MintTinyAmount } from "./commands/MintTinyAmount";
+import { MintMultipleSmall } from "./commands/MintMultipleSmall";
 import { Model, Real } from "./commands/types";
 import { UpdateRecipient } from "./commands/UpdateRecipient";
 import { UpdateRecipientErr } from "./commands/UpdateRecipientErr";
+import { UpdateRecipientSequence } from "./commands/UpdateRecipientSequence";
+import { ValidateAccessControl } from "./commands/ValidateAccessControl";
+import { ValidateVestingCalculation } from "./commands/ValidateVestingCalculation";
 import { reportCommandRuns } from "./commands/utils";
 
 const contracts = projectFactory(project, "simnet");
@@ -36,11 +46,20 @@ test("SIP-031 Stateful", () => {
   const invariants = [
     Claim(accounts),
     ClaimErr(accounts),
+    ClaimWithInvariants(accounts),
+    ClaimStressTest(accounts),
     MineBlocks(),
+    MineBlocksAdvanced(),
+    MineBlocksBoundary(),
     Mint(),
     MintInitial(accounts),
+    MintTinyAmount(),
+    MintMultipleSmall(),
     UpdateRecipient(accounts),
     UpdateRecipientErr(accounts),
+    UpdateRecipientSequence(accounts),
+    ValidateAccessControl(accounts),
+    ValidateVestingCalculation(accounts),
   ];
 
   fc.assert(
@@ -51,7 +70,7 @@ test("SIP-031 Stateful", () => {
         fc.modelRun(state, cmds);
       },
     ),
-    { numRuns: 10, verbose: 2 },
+    { numRuns: 50, verbose: 2 },
   );
 
   reportCommandRuns(model);
