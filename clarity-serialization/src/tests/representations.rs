@@ -519,3 +519,32 @@ fn test_contract_name_deserialization_errors(#[case] buffer: Vec<u8>, #[case] er
     assert!(result.is_err());
     assert_eq!(result.unwrap_err().to_string(), error_message);
 }
+
+#[test]
+fn prop_contract_name_length_bounds() {
+    proptest!(|(extra in 0usize..3)| {
+        let min = CONTRACT_MIN_NAME_LENGTH as usize;
+        let max = CONTRACT_MAX_NAME_LENGTH as usize;
+        let hard = MAX_STRING_LEN as usize;
+
+        // Too short must fail to parse.
+        let short = "a".repeat(min.saturating_sub(1));
+        prop_assert!(ContractName::try_from(short).is_err());
+
+        // At max parses and serializes.
+        let at_len = max.min(hard);
+        let at = "a".repeat(at_len);
+        let name = ContractName::try_from(at).unwrap();
+        let mut buf = Vec::new();
+        name.consensus_serialize(&mut buf).unwrap();
+
+        // Over contract max parses, but serialization must fail.
+        if max < hard {
+            let over_len = (max + 1 + extra).min(hard);
+            let over = "a".repeat(over_len);
+            let name = ContractName::try_from(over).unwrap();
+            let mut b = Vec::new();
+            prop_assert!(name.consensus_serialize(&mut b).is_err());
+        }
+    });
+}
