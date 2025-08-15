@@ -244,6 +244,22 @@ fn test_clarity_name_serialization(#[case] name: &str) {
     assert_eq!(deserialized, name);
 }
 
+#[test]
+fn prop_clarity_name_roundtrip() {
+    proptest!(|(s in any_valid_clarity_name())| {
+        let name = ClarityName::try_from(s.clone()).unwrap();
+        prop_assert_eq!(name.as_str(), s);
+
+        let mut buf = Vec::new();
+        name.consensus_serialize(&mut buf).unwrap();
+        prop_assert_eq!(buf.first().copied(), Some(name.len()));
+        prop_assert_eq!(&buf[1..], name.as_bytes());
+
+        let back = ClarityName::consensus_deserialize(&mut buf.as_slice()).unwrap();
+        prop_assert_eq!(back, name);
+    });
+}
+
 // the first byte is the length of the buffer.
 #[rstest]
 #[case::invalid_utf8(vec![4, 0xFF, 0xFE, 0xFD, 0xFC], "Failed to parse Clarity name: could not contruct from utf8")]
